@@ -1,0 +1,23 @@
+name: CI
+on: [push, pull_request]
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - run: pip install platformio
+      - name: Native unit tests
+        run: pio test -e native
+      - name: Build dev + prod
+        run: pio run -e nodemcuv2_dev -e nodemcuv2_prod
+      - name: Firmware size gate (SPEC 146)
+        run: |
+          SIZE=$(stat -c%s .pio/build/nodemcuv2_prod/firmware.bin)
+          echo "prod firmware: $SIZE bytes"
+          # OTA needs free sketch space >= image size; 1019KB total sketch region
+          test "$SIZE" -le 500000 || { echo "::error::firmware exceeds OTA budget"; exit 1; }
+      - name: SHA-256
+        run: sha256sum .pio/build/nodemcuv2_prod/firmware.bin

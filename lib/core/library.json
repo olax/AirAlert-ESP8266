@@ -1,0 +1,6 @@
+{
+  "name": "airalert-core",
+  "version": "0.1.0",
+  "description": "Pure business logic: no Arduino dependencies (SPEC 109)",
+  "build": { "srcDir": "src" }
+}

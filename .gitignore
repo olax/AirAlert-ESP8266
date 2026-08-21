@@ -1,0 +1,10 @@
+.pio/
+.vscode/
+build/
+secrets.ini
+secrets.json
+*.local.*
+.env
+*.bin
+*.elf
+__pycache__/
