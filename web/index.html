@@ -105,6 +105,14 @@ button.btn.warn{background:#a35b18}button.btn.bad{background:#a33030}button.btn.
 </div>
 </div>
 <div class="card">
+<h2>Індикація тривоги (вихід D0)</h2>
+<p class="mut">LED або реле з лампою: горить, поки триває будь-яка тривога.</p>
+<div class="row"><label><input type="checkbox" id="l_steady"> Стійкий сигнал без блимань (для реле/лампи)</label></div>
+<label>Полярність виходу</label>
+<select id="l_ah"><option value="1">ACTIVE HIGH</option><option value="0">ACTIVE LOW</option></select>
+<button class="btn" onclick="saveConfig()">Зберегти</button>
+</div>
+<div class="card">
 <h2>Часткова тривога</h2>
 <div class="row"><label><input type="checkbox" id="p_act"> Враховувати часткову</label></div>
 <div class="row"><label><input type="checkbox" id="p_sir"> Сирена для часткової</label></div>
@@ -200,6 +208,7 @@ async function refresh(){try{const s=await get("/api/v1/status");
 function fmtDur(s){if(s<0||s==null)return"—";const h=Math.floor(s/3600),m=Math.floor(s%3600/60);return h?`${h} год ${m} хв`:m?`${m} хв`:`${s} с`}
 async function loadCfg(){cfg=await get("/api/v1/config");
  $("r_ah").value=cfg.relay.active_high?"1":"0";$("r_max").value=cfg.relay.max_on_ms;$("r_test").value=cfg.relay.test_ms;
+ $("l_steady").checked=cfg.led.alert_steady;$("l_ah").value=cfg.led.alert_active_high?"1":"0";
  $("p_act").checked=cfg.alerts.partial_active;$("p_sir").checked=cfg.alerts.partial_siren;$("p_led").checked=cfg.alerts.partial_led;
  $("a_poll").value=cfg.alerts.poll_sec;$("a_stale").value=cfg.alerts.stale_sec;
  selected=(cfg.locations||[]).map(l=>l.uid);
@@ -221,6 +230,7 @@ function collectProfile(){const k=$("ptype").value,p=cfg.profiles[k];
   p[sec][f]=el.type==="checkbox"?el.checked:+el.value})}
 async function saveConfig(){try{if(cfg.profiles&&$("profform").innerHTML)collectProfile();
  cfg.relay.active_high=$("r_ah").value==="1";cfg.relay.max_on_ms=+$("r_max").value;cfg.relay.test_ms=+$("r_test").value;
+ cfg.led.alert_steady=$("l_steady").checked;cfg.led.alert_active_high=$("l_ah").value==="1";
  cfg.alerts.partial_active=$("p_act").checked;cfg.alerts.partial_siren=$("p_sir").checked;cfg.alerts.partial_led=$("p_led").checked;
  cfg.alerts.poll_sec=+$("a_poll").value;cfg.alerts.stale_sec=+$("a_stale").value;
  await put("/api/v1/config",cfg);alert("Збережено");refresh()}catch(e){alert("Помилка: "+e.message)}}

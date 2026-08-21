@@ -41,6 +41,11 @@ struct AppConfig {
     // reboot-loop guard (SPEC 28)
     uint16_t startupCooldownSec = 300;
 
+    // indication (simplified two-channel scheme; rgb mode reserved for the
+    // future WS2812/MCP23017 backend)
+    bool alertIndicatorSteady = false;     // true when it drives a relay/lamp
+    bool alertIndicatorActiveHigh = true;
+
     // selected locations (SPEC 21)
     Location selected[SnapshotBuilder::kMaxSelected];
     uint8_t selectedCount = 0;
@@ -127,6 +132,8 @@ inline void configToJson(const AppConfig& c, JsonDocument& d) {
     d["mute"]["snooze_min"] = c.snoozeMinutes;
     d["mute"]["all_types"] = c.muteAllAlertTypes;
     d["startup"]["cooldown_sec"] = c.startupCooldownSec;
+    d["led"]["alert_steady"] = c.alertIndicatorSteady;
+    d["led"]["alert_active_high"] = c.alertIndicatorActiveHigh;
     JsonArray locs = d["locations"].to<JsonArray>();
     for (uint8_t i = 0; i < c.selectedCount; ++i) {
         JsonObject o = locs.add<JsonObject>();
@@ -171,6 +178,8 @@ inline void configFromJson(JsonVariantConst d, AppConfig& c) {
     c.snoozeMinutes = d["mute"]["snooze_min"] | c.snoozeMinutes;
     c.muteAllAlertTypes = d["mute"]["all_types"] | c.muteAllAlertTypes;
     c.startupCooldownSec = d["startup"]["cooldown_sec"] | c.startupCooldownSec;
+    c.alertIndicatorSteady = d["led"]["alert_steady"] | c.alertIndicatorSteady;
+    c.alertIndicatorActiveHigh = d["led"]["alert_active_high"] | c.alertIndicatorActiveHigh;
     JsonArrayConst locs = d["locations"];
     if (!locs.isNull()) {
         c.selectedCount = 0;

@@ -19,7 +19,7 @@
 #include "config/SecretsStore.h"
 #include "hardware/ButtonController.h"
 #include "hardware/RelayController.h"
-#include "hardware/StatusLed.h"
+#include "hardware/Indication.h"
 #include "network/WifiService.h"
 #include "storage/EventLogStore.h"
 #include "storage/StateStore.h"
@@ -31,7 +31,8 @@ namespace pins {
 constexpr uint8_t RELAY = 14;       // D5 (SPEC 61, 64)
 constexpr uint8_t MUTE = 12;        // D6
 constexpr uint8_t TEST = 13;        // D7
-constexpr uint8_t BUILTIN_LED = 2;  // D4, inverted
+constexpr uint8_t BUILTIN_LED = 2;  // D4, inverted — SYSTEM indicator
+constexpr uint8_t ALERT_OUT = 16;   // D0 — alert LED or indication relay
 } // namespace pins
 
 static SecretsStore secrets;
@@ -48,7 +49,7 @@ static BackoffPolicy backoff;
 static NotificationEngine notify;
 static RelayController relay;
 static ButtonController btnMute, btnTest;
-static StatusLed led;
+static Indication led;
 static WifiService wifi;
 static WebUi web;
 static LocationCatalog catalog;
@@ -88,6 +89,8 @@ static void applyConfig() {
     health.setConfig({appCfg.apiStaleAfterSec * 1000u});
     builder.setSelected(appCfg.selected, appCfg.selectedCount);
     builder.setCatalog(&catalog);
+    led.begin(pins::BUILTIN_LED, true, pins::ALERT_OUT,
+              appCfg.alertIndicatorActiveHigh, appCfg.alertIndicatorSteady);
 }
 
 static const char* eventName(AlertEvent e) {
@@ -302,7 +305,8 @@ void setup() {
 
     btnMute.begin(pins::MUTE);
     btnTest.begin(pins::TEST);
-    led.begin(pins::BUILTIN_LED, true);
+    // config not loaded yet: safe defaults, re-begun in applyConfig()
+    led.begin(pins::BUILTIN_LED, true, pins::ALERT_OUT, true, false);
 
     if (!LittleFS.begin()) Serial.println("[FS] LittleFS mount failed");
 
@@ -340,16 +344,28 @@ void setup() {
 }
 
 static void updateLed(bool sirenOn) {
-    using Mode = StatusLed::Mode;
-    if (sirenOn) { led.setMode(Mode::SirenOn); return; }
-    if (!engine.anyActive()) { led.setMode(Mode::Off); return; }
-    if (notify.muted()) { led.setMode(Mode::Muted); return; } // SPEC 51
-    bool full = false;
-    for (uint8_t i = 0; i < kAlertTypeCount; ++i)
-        if (engine.status(static_cast<AlertType>(i)).coverage == Coverage::Full)
-            full = true;
-    led.setMode((full || appCfg.partialLed) ? (full ? Mode::AlertFull : Mode::AlertPartial)
-                                            : Mode::Off);
+    // SYSTEM channel: solid = fully operational
+    Indication::SysState sys;
+    if (wifi.state() == WifiService::State::Provisioning ||
+        !secrets.apiToken.length() || otaInProgress)
+        sys = Indication::SysState::Setup;
+    else if (wifi.online() && ntpSynced && health.online() && !health.stale(millis()))
+        sys = Indication::SysState::Ok;
+    else
+        sys = Indication::SysState::Degraded;
+    led.setSystem(sys);
+
+    // ALERT channel
+    auto view = Indication::AlertView::None;
+    if (engine.anyActive()) {
+        bool full = false;
+        for (uint8_t i = 0; i < kAlertTypeCount; ++i)
+            if (engine.status(static_cast<AlertType>(i)).coverage == Coverage::Full)
+                full = true;
+        if (full) view = Indication::AlertView::Full;
+        else if (appCfg.partialLed) view = Indication::AlertView::Partial; // SPEC 20
+    }
+    led.setAlert(view, notify.muted(), sirenOn);
 }
 
 // SPEC 116: non-blocking tick pipeline

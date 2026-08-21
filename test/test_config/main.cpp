@@ -24,6 +24,8 @@ void test_roundtrip_preserves_everything() {
     c.relayMaxOnMs = 45000;
     c.selectedCount = 1;
     c.selected[0] = {123, LocationType::Hromada, 14, 67};
+    c.alertIndicatorSteady = true;
+    c.alertIndicatorActiveHigh = false;
     c.profiles[0].start = Pattern{true, 5000, 500, 2};
     c.profiles[0].reminderIntervalMs = 600000;
 
@@ -37,6 +39,8 @@ void test_roundtrip_preserves_everything() {
     TEST_ASSERT_FALSE(r.partialSiren);
     TEST_ASSERT_FALSE(r.relayActiveHigh);
     TEST_ASSERT_EQUAL_UINT32(45000, r.relayMaxOnMs);
+    TEST_ASSERT_TRUE(r.alertIndicatorSteady);
+    TEST_ASSERT_FALSE(r.alertIndicatorActiveHigh);
     TEST_ASSERT_EQUAL(1, r.selectedCount);
     TEST_ASSERT_EQUAL(123, r.selected[0].uid);
     TEST_ASSERT_EQUAL(LocationType::Hromada, r.selected[0].type);
