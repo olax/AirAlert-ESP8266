@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AirAlert — налаштування</title>
+<style>
+body{background:#111418;color:#e8eaed;font:15px/1.5 system-ui,sans-serif;display:flex;justify-content:center;padding:20px}
+.card{background:#1b2026;border-radius:12px;padding:20px;width:100%;max-width:420px}
+h1{font-size:20px;margin:0 0 4px}p{color:#9aa3ad;font-size:13.5px;margin:4px 0 14px}
+label{display:block;margin:12px 0 4px;color:#9aa3ad;font-size:13px}
+input,select{width:100%;box-sizing:border-box;background:#12161b;color:#e8eaed;border:1px solid #333c46;border-radius:7px;padding:9px;font-size:15px}
+button{width:100%;margin-top:18px;background:#4d9fec;color:#fff;border:0;border-radius:8px;padding:12px;font-size:16px;cursor:pointer}
+#msg{margin-top:12px;font-size:14px;color:#eec97a;min-height:20px}
+.ok{color:#7fd6a6!important}
+</style>
+</head>
+<body><div class="card">
+<h1>🚨 AirAlert</h1>
+<p>Перше налаштування пристрою. Після збереження пристрій перезавантажиться
+і підключиться до вашої мережі.</p>
+<label>Wi-Fi мережа</label>
+<select id="ssid"><option>Сканування…</option></select>
+<label>Або введіть SSID вручну</label>
+<input id="ssidm" placeholder="Назва мережі">
+<label>Пароль Wi-Fi</label>
+<input id="wpass" type="password">
+<label>API токен alerts.in.ua</label>
+<input id="tok" type="password" placeholder="Отримати: alerts.in.ua/api-request">
+<label>Пароль адміністратора (для цього пристрою)</label>
+<input id="apass" type="password" autocomplete="new-password">
+<label>Назва пристрою</label>
+<input id="dname" value="AirAlert">
+<button onclick="save()">Зберегти й перезавантажити</button>
+<div id="msg"></div>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+fetch("/api/v1/scan").then(r=>r.json()).then(d=>{
+ $("ssid").innerHTML="<option value=''>— виберіть —</option>"+
+  d.networks.map(n=>`<option>${n.ssid}</option>`).join("")}).catch(()=>{});
+async function save(){
+ const body={wifi_ssid:$("ssid").value||$("ssidm").value,wifi_pass:$("wpass").value,
+  api_token:$("tok").value,admin_pass:$("apass").value,device_name:$("dname").value};
+ if(!body.wifi_ssid){$("msg").textContent="Вкажіть Wi-Fi мережу";return}
+ if(!body.admin_pass||body.admin_pass.length<6){$("msg").textContent="Пароль адміністратора: мінімум 6 символів";return}
+ try{const r=await fetch("/api/v1/setup",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  if(!r.ok){const e=await r.json().catch(()=>({}));$("msg").textContent="Помилка: "+(e.error?e.error.message:r.status);return}
+  $("msg").className="ok";$("msg").textContent="Збережено. Пристрій перезавантажується — підключіться до своєї мережі і відкрийте нову адресу пристрою.";
+ }catch(e){$("msg").textContent="Помилка з'єднання"}}
+</script>
+</body>
+</html>

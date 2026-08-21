@@ -1,5 +1,10 @@
 #include "WebUi.h"
 #include <LittleFS.h>
+#include <ESP8266HTTPClient.h>
+#include <Updater.h>
+#include <WiFiClientSecureBearSSL.h>
+#include <bearssl/bearssl_hash.h>
+#include "alerts/CaBundle.h"
 #include "WebAssets.h"
 
 using namespace airalert;
@@ -23,6 +28,46 @@ void WebUi::begin(const Deps& d) {
         server_.send_P(200, ASSET_LOCATIONS_JSON_MIME,
                        reinterpret_cast<const char*>(ASSET_LOCATIONS_JSON), ASSET_LOCATIONS_JSON_LEN);
     });
+
+    // Captive portal (SPEC 80): OS probes redirect to the setup page while
+    // in provisioning mode; otherwise they 404.
+    auto captive = [this] {
+        if (d_.wifi->state() == WifiService::State::Provisioning) {
+            server_.sendHeader("Location", "http://" + WiFi.softAPIP().toString() + "/setup");
+            server_.send(302, "text/plain", "");
+        } else {
+            sendError(404, "NOT_FOUND", "not provisioning");
+        }
+    };
+    for (const char* probe : {"/generate_204", "/gen_204", "/hotspot-detect.html",
+                              "/ncsi.txt", "/connecttest.txt", "/fwlink", "/redirect"})
+        server_.on(probe, HTTP_GET, captive);
+    server_.on("/setup", HTTP_GET, [this] {
+        server_.sendHeader("Content-Encoding", "gzip");
+        server_.send_P(200, ASSET_SETUP_HTML_MIME,
+                       reinterpret_cast<const char*>(ASSET_SETUP_HTML), ASSET_SETUP_HTML_LEN);
+    });
+    server_.on("/api/v1/scan", HTTP_GET, [this] { handleScan(); });
+    server_.on("/api/v1/setup", HTTP_POST, [this] { handleSetup(); });
+    server_.on("/api/v1/wifi/forget", HTTP_POST, [this] { // SPEC 82
+        if (!authed()) return;
+        server_.send(200, "application/json", "{\"ok\":true}");
+        d_.log->log(LogEvent::ConfigChanged, "wifi_forget");
+        d_.wifi->forget();
+    });
+    server_.on("/api/v1/ota/upload", HTTP_POST,
+               [this] { // final response after upload completes
+                   if (Update.hasError()) {
+                       d_.log->log(LogEvent::OtaFailed);
+                       sendError(500, "OTA_FAILED", Update.getErrorString().c_str());
+                   } else {
+                       d_.log->log(LogEvent::OtaSuccess);
+                       server_.send(200, "application/json", "{\"ok\":true}");
+                       rebootAt_ = millis() + 500;
+                   }
+               },
+               [this] { handleOtaUpload(); });
+    server_.on("/api/v1/ota/url", HTTP_POST, [this] { handleOtaUrl(); });
 
     server_.on("/api/v1/login", HTTP_POST, [this] { handleLogin(); });
     server_.on("/api/v1/status", HTTP_GET, [this] { handleStatus(); });
@@ -257,6 +302,153 @@ void WebUi::handleSystem() { // SPEC 114, 126
     d["rssi"] = WiFi.RSSI();
     d["catalogue"] = "v1 (155 locations)";
     sendJson(d);
+}
+
+void WebUi::handleScan() {
+    // unauthenticated by design: needed on the open first-run portal, exposes
+    // only nearby SSIDs (visible to anyone with a radio anyway)
+    const int n = WiFi.scanNetworks();
+    JsonDocument d;
+    JsonArray arr = d["networks"].to<JsonArray>();
+    for (int i = 0; i < n && i < 20; ++i) {
+        JsonObject o = arr.add<JsonObject>();
+        o["ssid"] = WiFi.SSID(i);
+        o["rssi"] = WiFi.RSSI(i);
+        o["open"] = WiFi.encryptionType(i) == ENC_TYPE_NONE;
+    }
+    WiFi.scanDelete();
+    sendJson(d);
+}
+
+void WebUi::handleSetup() { // SPEC 80
+    // Unauthenticated ONLY while the device has no admin password (first run).
+    // A provisioned device demands auth even in recovery mode.
+    if (d_.secrets->hasWebPassword() && !authed()) return;
+    JsonDocument d;
+    if (deserializeJson(d, server_.arg("plain")) != DeserializationError::Ok) {
+        sendError(400, "BAD_JSON", "invalid JSON body");
+        return;
+    }
+    const String ssid = d["wifi_ssid"] | "";
+    const String apass = d["admin_pass"] | "";
+    if (!ssid.length()) { sendError(422, "BAD_SSID", "wifi_ssid required"); return; }
+    if (!d_.secrets->hasWebPassword() && apass.length() < 6) {
+        sendError(422, "BAD_PASSWORD", "admin password >= 6 chars");
+        return;
+    }
+    d_.secrets->wifiSsid = ssid;
+    d_.secrets->wifiPass = d["wifi_pass"] | "";
+    const String tok = d["api_token"] | "";
+    if (tok.length()) d_.secrets->apiToken = tok;
+    if (apass.length() >= 6) d_.secrets->setWebPassword(apass);
+    const String name = d["device_name"] | "";
+    if (name.length()) {
+        strncpy(d_.cfg->deviceName, name.c_str(), sizeof d_.cfg->deviceName - 1);
+        d_.cfg->deviceName[sizeof d_.cfg->deviceName - 1] = 0;
+        d_.configStore->save(*d_.cfg);
+    }
+    if (!d_.secrets->save()) { sendError(500, "FS_ERROR", "cannot persist"); return; }
+    d_.log->log(LogEvent::ConfigChanged, "setup_portal");
+    server_.send(200, "application/json", "{\"ok\":true}");
+    rebootAt_ = millis() + 800; // reboot into STA with the new credentials
+}
+
+void WebUi::handleOtaUpload() { // SPEC 102, Invariant 8
+    HTTPUpload& up = server_.upload();
+    if (up.status == UPLOAD_FILE_START) {
+        if (!authed()) return; // checked once at stream start
+        d_.prepareOta();       // relay OFF, queue cleared, patterns stopped
+        d_.log->log(LogEvent::OtaStarted, "source=upload");
+        const uint32_t maxSketch = (ESP.getFreeSketchSpace() - 0x1000) & 0xFFFFF000;
+        if (!Update.begin(maxSketch)) Update.printError(Serial);
+    } else if (up.status == UPLOAD_FILE_WRITE) {
+        if (Update.write(up.buf, up.currentSize) != up.currentSize)
+            Update.printError(Serial);
+    } else if (up.status == UPLOAD_FILE_END) {
+        if (!Update.end(true)) Update.printError(Serial);
+    } else if (up.status == UPLOAD_FILE_ABORTED) {
+        Update.end();
+        d_.log->log(LogEvent::OtaFailed, "aborted");
+    }
+    yield();
+}
+
+void WebUi::handleOtaUrl() { // SPEC 103: HTTPS + size + SHA-256 mandatory
+    if (!authed()) return;
+    JsonDocument d;
+    if (deserializeJson(d, server_.arg("plain")) != DeserializationError::Ok) {
+        sendError(400, "BAD_JSON", "invalid JSON body");
+        return;
+    }
+    const String url = d["url"] | "";
+    String sha = d["sha256"] | "";
+    sha.toLowerCase();
+    if (!url.startsWith("https://")) { sendError(422, "BAD_URL", "HTTPS required"); return; }
+    if (sha.length() != 64) { sendError(422, "BAD_SHA", "sha256 hex required"); return; }
+
+    d_.prepareOta(); // Invariant 8
+    d_.log->log(LogEvent::OtaStarted, "source=url");
+
+    BearSSL::WiFiClientSecure client;
+    static BearSSL::X509List cas(CA_BUNDLE_PEM);
+    client.setTrustAnchors(&cas);
+    client.setBufferSizes(4096, 512);
+    HTTPClient http;
+    http.setTimeout(20000);
+    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS); // GitHub 302s
+    if (!http.begin(client, url)) { sendError(500, "NET", "begin failed"); return; }
+    const int code = http.GET();
+    if (code != HTTP_CODE_OK) {
+        http.end();
+        d_.log->log(LogEvent::OtaFailed, "http");
+        sendError(502, "HTTP_ERROR", String(code).c_str());
+        return;
+    }
+    const int len = http.getSize();
+    const uint32_t maxSketch = (ESP.getFreeSketchSpace() - 0x1000) & 0xFFFFF000;
+    if (len <= 0 || static_cast<uint32_t>(len) > maxSketch) {
+        http.end();
+        d_.log->log(LogEvent::OtaFailed, "size");
+        sendError(422, "BAD_SIZE", "image does not fit");
+        return;
+    }
+    if (!Update.begin(len)) {
+        http.end();
+        sendError(500, "OTA_FAILED", Update.getErrorString().c_str());
+        return;
+    }
+    br_sha256_context sha_ctx;
+    br_sha256_init(&sha_ctx);
+    WiFiClient& stream = http.getStream();
+    uint8_t buf[1024];
+    int remaining = len;
+    while (remaining > 0 && http.connected()) {
+        const size_t got = stream.readBytes(buf, min(static_cast<int>(sizeof buf), remaining));
+        if (!got) break;
+        br_sha256_update(&sha_ctx, buf, got);
+        if (Update.write(buf, got) != got) break;
+        remaining -= static_cast<int>(got);
+        yield(); // feed the watchdog during the long download
+    }
+    http.end();
+    uint8_t digest[32];
+    br_sha256_out(&sha_ctx, digest);
+    char hex[65];
+    for (int i = 0; i < 32; ++i) snprintf(hex + i * 2, 3, "%02x", digest[i]);
+    if (remaining != 0 || sha != hex) { // checksum gate (SPEC 130)
+        Update.end();
+        d_.log->log(LogEvent::OtaFailed, remaining ? "truncated" : "sha256_mismatch");
+        sendError(422, "VERIFY_FAILED", remaining ? "truncated download" : "sha256 mismatch");
+        return;
+    }
+    if (!Update.end(true)) {
+        d_.log->log(LogEvent::OtaFailed);
+        sendError(500, "OTA_FAILED", Update.getErrorString().c_str());
+        return;
+    }
+    d_.log->log(LogEvent::OtaSuccess, "source=url");
+    server_.send(200, "application/json", "{\"ok\":true}");
+    rebootAt_ = millis() + 500;
 }
 
 // ---- helpers ----------------------------------------------------------------

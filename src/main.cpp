@@ -1,5 +1,5 @@
-// AirAlert-ESP8266 — Phase 3: live API polling, serial/debug state only.
-// No relay activation yet (SPEC 198). Boot order per SPEC 25 (Invariant 3).
+// AirAlert-ESP8266 — main wiring. Boot order per SPEC 25 (Invariant 3),
+// non-blocking tick pipeline per SPEC 116.
 #include <Arduino.h>
 #include <ESP8266WiFi.h>
 #include <LittleFS.h>
@@ -14,12 +14,13 @@
 #include "airalert/SnapshotBuilder.h"
 #include "airalert/StartupPolicy.h"
 #include "alerts/AlertsClient.h"
+#include "alerts/LocationCatalog.h"
 #include "config/ConfigStore.h"
+#include "config/SecretsStore.h"
 #include "hardware/ButtonController.h"
 #include "hardware/RelayController.h"
 #include "hardware/StatusLed.h"
-#include "alerts/LocationCatalog.h"
-#include "config/SecretsStore.h"
+#include "network/WifiService.h"
 #include "storage/EventLogStore.h"
 #include "storage/StateStore.h"
 #include "web/WebUi.h"
@@ -33,16 +34,12 @@ constexpr uint8_t TEST = 13;        // D7
 constexpr uint8_t BUILTIN_LED = 2;  // D4, inverted
 } // namespace pins
 
-
-
-static SecretsStore cfg;
+static SecretsStore secrets;
 static AppConfig appCfg;
 static ConfigStore configStore;
 static StateStore stateStore;
 static PersistedState pstate;
 static EventLogStore eventLog;
-static WebUi web;
-static LocationCatalog catalog;
 static AlertsClient client;
 static AlertEngine engine;
 static SnapshotBuilder builder;
@@ -52,8 +49,19 @@ static NotificationEngine notify;
 static RelayController relay;
 static ButtonController btnMute, btnTest;
 static StatusLed led;
+static WifiService wifi;
+static WebUi web;
+static LocationCatalog catalog;
+
 static uint32_t nextPollAt = 0;
-static bool ready = false;
+static bool ntpStarted = false;
+static bool ntpSynced = false;
+static bool wasOnline = false;
+static bool otaInProgress = false;
+
+static bool apiReady() {
+    return wifi.online() && ntpSynced && client.hasToken();
+}
 
 static void muteNow(bool longPress) {
     relay.forceOff(); // Invariant 4: relay OFF before anything else
@@ -62,7 +70,13 @@ static void muteNow(bool longPress) {
     eventLog.log(LogEvent::Mute, longPress ? "scope=snooze" : "scope=until_clear");
 }
 
-// Config -> subsystems (SPEC 25 step 4; re-applied after Web UI edits later)
+static void prepareOta() { // Invariant 8
+    otaInProgress = true;
+    notify.stopAll();
+    relay.forceOff();
+}
+
+// Config -> subsystems (SPEC 25 step 4; re-applied after Web UI edits)
 static void applyConfig() {
     engine.setConfig({appCfg.startConfirmations, appCfg.endConfirmations,
                       appCfg.partialActive});
@@ -87,192 +101,50 @@ static const char* eventName(AlertEvent e) {
     }
 }
 
-// ---- minimal serial console: provisioning before the Web UI exists ----------
-static void handleSerialLine(String line) {
-    line.trim();
-    if (line.startsWith("setwifi ")) {
-        const int sp = line.indexOf(' ', 8);
-        if (sp < 0) { Serial.println("[CFG] usage: setwifi <ssid> <pass>"); return; }
-        cfg.wifiSsid = line.substring(8, sp);
-        cfg.wifiPass = line.substring(sp + 1);
-        Serial.printf("[CFG] wifi ssid='%s' %s\n", cfg.wifiSsid.c_str(),
-                      cfg.save() ? "saved, restarting" : "SAVE FAILED");
-        delay(500);
-        ESP.restart();
-    } else if (line.startsWith("settoken ")) {
-        cfg.apiToken = line.substring(9);
-        Serial.printf("[CFG] token %s\n", cfg.save() ? "saved, restarting" : "SAVE FAILED");
-        delay(500);
-        ESP.restart();
-    } else if (line.startsWith("setpass ")) { // admin password for Web UI
-        cfg.setWebPassword(line.substring(8));
-        Serial.printf("[CFG] web password %s\n", cfg.save() ? "saved" : "SAVE FAILED");
-    } else if (line == "show") { // secrets never printed (SPEC 6)
-        Serial.printf("[CFG] ssid='%s' token: %s webpass: %s\n", cfg.wifiSsid.c_str(),
-                      cfg.apiToken.length() ? "configured" : "MISSING",
-                      cfg.hasWebPassword() ? "set" : "NOT SET");
-    } else if (line == "restart") {
-        ESP.restart();
-    } else if (line == "mute") {
-        muteNow(false);
-    } else if (line == "unmute") {
-        notify.unmute();
-        eventLog.log(LogEvent::Unmute);
-    } else if (line == "test") { // SPEC 54: short relay pulse
-        notify.manualTest(millis());
-        eventLog.log(LogEvent::Test, "source=serial");
-    } else if (line == "config") {
-        JsonDocument d;
-        configToJson(appCfg, d);
-        serializeJson(d, Serial); // config never contains secrets (SPEC 91)
-        Serial.println();
-    } else if (line == "log") {
-        for (const char* path : {"/log/ev.0", "/log/ev.1"}) {
-            File f = LittleFS.open(path, "r");
-            if (!f) continue;
-            while (f.available()) Serial.write(f.read());
-            f.close();
-        }
-    } else if (line.startsWith("sim ")) {
-#ifdef AIRALERT_DEV
-        // dev-only: inject a snapshot to exercise engine->notify->relay
-        // with real timing on real hardware (SPEC 199 "safe test load")
-        AlertEngine::Snapshot snap{};
-        const int sp = line.indexOf(' ', 4);
-        const String typeStr = sp > 0 ? line.substring(4, sp) : line.substring(4);
-        const String covStr = sp > 0 ? line.substring(sp + 1) : "none";
-        const AlertType t = alertTypeFromString(typeStr.c_str());
-        Coverage cov = Coverage::None;
-        if (covStr == "full") cov = Coverage::Full;
-        else if (covStr == "partial") cov = Coverage::Partial;
-        snap.types[static_cast<uint8_t>(t)] = {cov, static_cast<uint8_t>(cov != Coverage::None), 1755763200};
-        const bool firstSync = !engine.synced();
-        EngineEvent ev[8];
-        const size_t n = engine.applySnapshot(snap, ev, 8);
-        for (size_t i = 0; i < n; ++i) {
-            Serial.printf("[ALARM] %s type=%s (SIM)\n", eventName(ev[i].kind),
-                          alertTypeToString(ev[i].type));
-            notify.onEngineEvent(ev[i],
-                                 firstSync ? NotificationEngine::StartupMode::Short
-                                           : NotificationEngine::StartupMode::Normal,
-                                 millis());
-        }
-        Serial.printf("[SIM] applied %s=%s events=%u\n", typeStr.c_str(), covStr.c_str(), n);
-        nextPollAt = millis() + 300000; // hold real polls off while simulating
-#else
-        Serial.println("[SIM] dev build only");
-#endif
-    } else if (line == "status") {
-        Serial.printf("[ST] active=%d muted=%d playing=%d relay=%d tripped=%d heap=%u\n",
-                      engine.anyActive(), notify.muted(), notify.playing(),
-                      relay.isOn(), relay.safetyTripped(), ESP.getFreeHeap());
-    } else if (line.length()) {
-        Serial.println("[CFG] setwifi <ssid> <pass> | settoken <t> | show | restart | mute | unmute | test | status");
-    }
-}
+// Shared by the real poller and the dev `sim` command.
+static void applyAndNotify(const AlertEngine::Snapshot& snap, bool simulated) {
+    const bool firstSync = !engine.synced(); // SPEC 26
 
-static void pollSerial() {
-    static String buf;
-    while (Serial.available()) {
-        const char c = static_cast<char>(Serial.read());
-        if (c == '\n' || c == '\r') {
-            if (buf.length()) handleSerialLine(buf);
-            buf = "";
-        } else if (buf.length() < 160) {
-            buf += c;
+    auto startupMode = NotificationEngine::StartupMode::Normal;
+    if (firstSync) { // SPEC 26-28
+        const uint32_t fp = StartupPolicy::fingerprint(snap);
+        const int64_t nowUtc = time(nullptr) > 1600000000 ? time(nullptr) : 0;
+        startupMode = StartupPolicy::shouldNotify(
+                          fp, pstate.alertFingerprint, pstate.startupNotifAtUtc,
+                          nowUtc, appCfg.startupCooldownSec)
+                          ? NotificationEngine::StartupMode::Short
+                          : NotificationEngine::StartupMode::Silent;
+    }
+
+    EngineEvent ev[8];
+    const size_t n = engine.applySnapshot(snap, ev, 8); // SPEC 168
+    for (size_t i = 0; i < n; ++i) {
+        Serial.printf("[ALARM] %s type=%s%s\n", eventName(ev[i].kind),
+                      alertTypeToString(ev[i].type), simulated ? " (SIM)" : "");
+        auto mode = startupMode;
+        // SPEC 20: partial-only alert with siren disabled for partial
+        if (ev[i].kind == AlertEvent::Started && !appCfg.partialSiren &&
+            engine.status(ev[i].type).coverage == Coverage::Partial)
+            mode = NotificationEngine::StartupMode::Silent;
+        notify.onEngineEvent(ev[i], mode, millis());
+        switch (ev[i].kind) {
+            case AlertEvent::Started:
+                eventLog.log(engine.status(ev[i].type).coverage == Coverage::Full
+                                 ? LogEvent::AlertFull : LogEvent::AlertPartial,
+                             alertTypeToString(ev[i].type));
+                break;
+            case AlertEvent::Ended:
+                eventLog.log(LogEvent::AlertEnd, alertTypeToString(ev[i].type));
+                break;
+            default: break;
         }
     }
-}
-
-void setup() {
-    // step 1: relay safe OFF before anything else (Invariant 3).
-    // Default-polarity assumption until config is loaded (SPEC 39).
-    relay.begin(pins::RELAY, true, 30000);
-
-    Serial.begin(115200);
-    Serial.println();
-    Serial.printf("[BOOT] AirAlert-ESP8266 %s (%s)\n", AIRALERT_VERSION, __DATE__);
-    Serial.printf("[BOOT] reset reason: %s\n", ESP.getResetReason().c_str());
-
-    btnMute.begin(pins::MUTE);
-    btnTest.begin(pins::TEST);
-    led.begin(pins::BUILTIN_LED, true);
-
-    if (!LittleFS.begin()) Serial.println("[FS] LittleFS mount failed");
-
-    if (!configStore.load(appCfg)) {
-        appCfg = AppConfig{}; // corrupt/missing -> defaults (SPEC 128)
-        Serial.println("[CFG] using default config");
+    if (n > 0 || firstSync) { // SPEC 96: persist only on change
+        pstate.alertFingerprint = StartupPolicy::fingerprint(snap);
+        if (n > 0 || startupMode == NotificationEngine::StartupMode::Short)
+            pstate.startupNotifAtUtc = time(nullptr);
+        stateStore.save(pstate);
     }
-    applyConfig();
-    stateStore.load(pstate);
-    eventLog.begin();
-    eventLog.log(LogEvent::Boot, ESP.getResetReason().c_str());
-
-    if (!cfg.load()) {
-        Serial.println("[CFG] DEVICE NOT READY: no Wi-Fi config (SPEC 162)");
-        Serial.println("[CFG] use serial: setwifi <ssid> <pass>, then settoken <token>");
-        return;
-    }
-
-    client.begin(cfg.apiToken);
-
-    WiFi.mode(WIFI_STA);
-    WiFi.begin(cfg.wifiSsid, cfg.wifiPass);
-    Serial.printf("[WIFI] connecting to '%s'", cfg.wifiSsid.c_str());
-    for (int i = 0; i < 40 && WiFi.status() != WL_CONNECTED; ++i) {
-        delay(500);
-        Serial.print('.');
-    }
-    Serial.println();
-    if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("[WIFI] FAILED (recovery AP comes in Phase 7)");
-        return;
-    }
-    Serial.printf("[WIFI] IP: %s RSSI: %d\n",
-                  WiFi.localIP().toString().c_str(), WiFi.RSSI());
-    eventLog.log(LogEvent::WifiConnected);
-
-    // NTP: required for TLS cert validation (SPEC 83, boot step 8)
-    configTime("UTC0", "pool.ntp.org", "time.google.com");
-    Serial.print("[NTP] syncing");
-    time_t now = 0;
-    for (int i = 0; i < 40 && now < 1600000000; ++i) {
-        delay(500);
-        now = time(nullptr);
-        Serial.print('.');
-    }
-    Serial.println();
-    if (now < 1600000000) {
-        Serial.println("[NTP] FAILED - TLS will not validate; retrying in loop");
-    } else {
-        Serial.printf("[NTP] time ok: %lld\n", static_cast<long long>(now));
-    }
-
-    // Web UI is available regardless of token state (needed to configure it)
-    web.begin({&appCfg, &engine, &notify, &health, &relay, &configStore, &cfg,
-               &eventLog,
-               [] { applyConfig(); },
-               [](const String& t) {
-                   cfg.apiToken = t;
-                   cfg.save();
-                   client.begin(t);
-                   ready = true;
-                   nextPollAt = millis(); // poll with the new token immediately
-               },
-               [](bool longPress) { muteNow(longPress); },
-               [] {
-                   notify.unmute();
-                   eventLog.log(LogEvent::Unmute);
-               }});
-    Serial.printf("[WEB] http://%s/ (%s)\n", WiFi.localIP().toString().c_str(),
-                  cfg.hasWebPassword() ? "password set" : "SET PASSWORD: setpass <pass>");
-
-    if (!client.hasToken()) {
-        Serial.println("[API] DEVICE NOT READY: no API token (SPEC 162)");
-        return;
-    }
-    ready = true;
 }
 
 static void doPoll() {
@@ -283,61 +155,17 @@ static void doPoll() {
 
     BackoffPolicy::Outcome oc;
     switch (res.kind) {
-        case Kind::Ok: {
+        case Kind::Ok:
             if (!health.online()) eventLog.log(LogEvent::ApiOnline);
             health.onContact(millis());
             oc = BackoffPolicy::Outcome::Success;
-            const bool firstSync = !engine.synced(); // SPEC 26
-
-            // SPEC 26-28: how loud may a boot-time Started event be?
-            auto startupMode = NotificationEngine::StartupMode::Normal;
-            if (firstSync) {
-                const uint32_t fp = StartupPolicy::fingerprint(builder.snapshot());
-                const int64_t nowUtc = time(nullptr) > 1600000000 ? time(nullptr) : 0;
-                startupMode = StartupPolicy::shouldNotify(
-                                  fp, pstate.alertFingerprint, pstate.startupNotifAtUtc,
-                                  nowUtc, appCfg.startupCooldownSec)
-                                  ? NotificationEngine::StartupMode::Short
-                                  : NotificationEngine::StartupMode::Silent;
-            }
-
-            EngineEvent ev[8];
-            const size_t n = engine.applySnapshot(builder.snapshot(), ev, 8); // SPEC 168
-            for (size_t i = 0; i < n; ++i) {
-                Serial.printf("[ALARM] %s type=%s\n", eventName(ev[i].kind),
-                              alertTypeToString(ev[i].type));
-                auto mode = startupMode;
-                // SPEC 20: partial-only alert with siren disabled for partial
-                if (ev[i].kind == AlertEvent::Started && !appCfg.partialSiren &&
-                    engine.status(ev[i].type).coverage == Coverage::Partial)
-                    mode = NotificationEngine::StartupMode::Silent;
-                notify.onEngineEvent(ev[i], mode, millis());
-                switch (ev[i].kind) {
-                    case AlertEvent::Started:
-                        eventLog.log(engine.status(ev[i].type).coverage == Coverage::Full
-                                         ? LogEvent::AlertFull : LogEvent::AlertPartial,
-                                     alertTypeToString(ev[i].type));
-                        break;
-                    case AlertEvent::Ended:
-                        eventLog.log(LogEvent::AlertEnd, alertTypeToString(ev[i].type));
-                        break;
-                    default: break;
-                }
-            }
-            if (n > 0 || firstSync) { // SPEC 96: write only on change
-                pstate.alertFingerprint = StartupPolicy::fingerprint(builder.snapshot());
-                if (firstSync && startupMode == NotificationEngine::StartupMode::Short)
-                    pstate.startupNotifAtUtc = time(nullptr);
-                else if (n > 0)
-                    pstate.startupNotifAtUtc = time(nullptr); // START played counts too
-                stateStore.save(pstate);
-            }
+            applyAndNotify(builder.snapshot(), false);
             Serial.printf("[API] 200 ok alerts=%u skipped=%u active=%d latency=%lums heap=%u\n",
                           res.stats.total, res.stats.skipped, engine.anyActive(),
                           (unsigned long)latency, ESP.getFreeHeap());
             break;
-        }
         case Kind::NotModified:
+            if (!health.online()) eventLog.log(LogEvent::ApiOnline);
             health.onContact(millis());
             oc = BackoffPolicy::Outcome::NotModified;
             Serial.printf("[API] 304 not modified latency=%lums heap=%u\n",
@@ -370,10 +198,145 @@ static void doPoll() {
             Serial.printf("[API] API_OFFLINE code=%d heap=%u\n", res.httpCode, ESP.getFreeHeap());
             break;
     }
+    nextPollAt = millis() +
+                 backoff.next(oc, res.retryAfterSec, static_cast<uint8_t>(ESP.random() & 0xFF));
+}
 
-    const uint32_t delayMs =
-        backoff.next(oc, res.retryAfterSec, static_cast<uint8_t>(ESP.random() & 0xFF));
-    nextPollAt = millis() + delayMs;
+// ---- serial console ---------------------------------------------------------
+static void handleSerialLine(String line) {
+    line.trim();
+    if (line.startsWith("setwifi ")) {
+        const int sp = line.indexOf(' ', 8);
+        if (sp < 0) { Serial.println("[CFG] usage: setwifi <ssid> <pass>"); return; }
+        secrets.wifiSsid = line.substring(8, sp);
+        secrets.wifiPass = line.substring(sp + 1);
+        Serial.printf("[CFG] wifi ssid='%s' %s\n", secrets.wifiSsid.c_str(),
+                      secrets.save() ? "saved, restarting" : "SAVE FAILED");
+        delay(500);
+        ESP.restart();
+    } else if (line.startsWith("settoken ")) {
+        secrets.apiToken = line.substring(9);
+        Serial.printf("[CFG] token %s\n", secrets.save() ? "saved, restarting" : "SAVE FAILED");
+        delay(500);
+        ESP.restart();
+    } else if (line.startsWith("setpass ")) {
+        secrets.setWebPassword(line.substring(8));
+        Serial.printf("[CFG] web password %s\n", secrets.save() ? "saved" : "SAVE FAILED");
+    } else if (line == "forgetwifi") { // SPEC 82
+        eventLog.log(LogEvent::ConfigChanged, "wifi_forget");
+        wifi.forget();
+    } else if (line == "show") { // secrets never printed (SPEC 6)
+        Serial.printf("[CFG] ssid='%s' token: %s webpass: %s\n", secrets.wifiSsid.c_str(),
+                      secrets.apiToken.length() ? "configured" : "MISSING",
+                      secrets.hasWebPassword() ? "set" : "NOT SET");
+    } else if (line == "restart") {
+        ESP.restart();
+    } else if (line == "mute") {
+        muteNow(false);
+    } else if (line == "unmute") {
+        notify.unmute();
+        eventLog.log(LogEvent::Unmute);
+    } else if (line == "test") { // SPEC 54
+        notify.manualTest(millis());
+        eventLog.log(LogEvent::Test, "source=serial");
+    } else if (line == "status") {
+        Serial.printf("[ST] wifi=%d ntp=%d active=%d muted=%d playing=%d relay=%d tripped=%d heap=%u\n",
+                      wifi.online(), ntpSynced, engine.anyActive(), notify.muted(),
+                      notify.playing(), relay.isOn(), relay.safetyTripped(), ESP.getFreeHeap());
+    } else if (line == "config") {
+        JsonDocument d;
+        configToJson(appCfg, d); // never contains secrets (SPEC 91)
+        serializeJson(d, Serial);
+        Serial.println();
+    } else if (line == "log") {
+        for (const char* path : {"/log/ev.0", "/log/ev.1"}) {
+            File f = LittleFS.open(path, "r");
+            if (!f) continue;
+            while (f.available()) Serial.write(f.read());
+            f.close();
+        }
+    } else if (line.startsWith("sim ")) {
+#ifdef AIRALERT_DEV
+        AlertEngine::Snapshot snap{};
+        const int sp = line.indexOf(' ', 4);
+        const String typeStr = sp > 0 ? line.substring(4, sp) : line.substring(4);
+        const String covStr = sp > 0 ? line.substring(sp + 1) : "none";
+        Coverage cov = covStr == "full" ? Coverage::Full
+                       : covStr == "partial" ? Coverage::Partial : Coverage::None;
+        snap.types[static_cast<uint8_t>(alertTypeFromString(typeStr.c_str()))] =
+            {cov, static_cast<uint8_t>(cov != Coverage::None), 1755763200};
+        applyAndNotify(snap, true);
+        nextPollAt = millis() + 300000; // hold real polls off while simulating
+        Serial.printf("[SIM] applied %s=%s\n", typeStr.c_str(), covStr.c_str());
+#else
+        Serial.println("[SIM] dev build only");
+#endif
+    } else if (line.length()) {
+        Serial.println("[CFG] setwifi|settoken|setpass|forgetwifi|show|restart|mute|unmute|test|status|config|log|sim");
+    }
+}
+
+static void pollSerial() {
+    static String buf;
+    while (Serial.available()) {
+        const char c = static_cast<char>(Serial.read());
+        if (c == '\n' || c == '\r') {
+            if (buf.length()) handleSerialLine(buf);
+            buf = "";
+        } else if (buf.length() < 160) {
+            buf += c;
+        }
+    }
+}
+
+// ---- boot -------------------------------------------------------------------
+void setup() {
+    // step 1: relay safe OFF before anything else (Invariant 3).
+    // Default polarity assumption until config loads (SPEC 39).
+    relay.begin(pins::RELAY, true, 30000);
+
+    Serial.begin(115200);
+    Serial.println();
+    Serial.printf("[BOOT] AirAlert-ESP8266 %s (%s)\n", AIRALERT_VERSION, __DATE__);
+    Serial.printf("[BOOT] reset reason: %s\n", ESP.getResetReason().c_str());
+
+    btnMute.begin(pins::MUTE);
+    btnTest.begin(pins::TEST);
+    led.begin(pins::BUILTIN_LED, true);
+
+    if (!LittleFS.begin()) Serial.println("[FS] LittleFS mount failed");
+
+    if (!configStore.load(appCfg)) {
+        appCfg = AppConfig{}; // corrupt/missing -> defaults (SPEC 128)
+        Serial.println("[CFG] using default config");
+    }
+    applyConfig();
+    stateStore.load(pstate);
+    eventLog.begin();
+    eventLog.log(LogEvent::Boot, ESP.getResetReason().c_str());
+
+    secrets.load();
+    client.begin(secrets.apiToken);
+    wifi.begin(&secrets); // STA or provisioning AP (SPEC 78-81)
+
+    web.begin({&appCfg, &engine, &notify, &health, &relay, &configStore, &secrets,
+               &eventLog, &wifi,
+               [] { applyConfig(); },
+               [](const String& t) {
+                   secrets.apiToken = t;
+                   secrets.save();
+                   client.begin(t);
+                   nextPollAt = millis(); // poll with the new token immediately
+               },
+               [](bool longPress) { muteNow(longPress); },
+               [] {
+                   notify.unmute();
+                   eventLog.log(LogEvent::Unmute);
+               },
+               [] { prepareOta(); }});
+
+    if (!secrets.apiToken.length())
+        Serial.println("[API] DEVICE NOT READY: no API token (SPEC 162)");
 }
 
 static void updateLed(bool sirenOn) {
@@ -385,16 +348,32 @@ static void updateLed(bool sirenOn) {
     for (uint8_t i = 0; i < kAlertTypeCount; ++i)
         if (engine.status(static_cast<AlertType>(i)).coverage == Coverage::Full)
             full = true;
-    led.setMode(full ? Mode::AlertFull : Mode::AlertPartial);
+    led.setMode((full || appCfg.partialLed) ? (full ? Mode::AlertFull : Mode::AlertPartial)
+                                            : Mode::Off);
 }
 
 // SPEC 116: non-blocking tick pipeline
 void loop() {
     const uint32_t now = millis();
     pollSerial();
+    wifi.tick(now);
     web.tick();
+    if (otaInProgress) return; // Invariant 8: nothing else runs during OTA
 
-    // buttons work even before Wi-Fi/API are ready
+    // Wi-Fi online/offline transitions -> log + NTP kick-off
+    if (wifi.online() != wasOnline) {
+        wasOnline = wifi.online();
+        eventLog.log(wasOnline ? LogEvent::WifiConnected : LogEvent::WifiDisconnected);
+        if (wasOnline && !ntpStarted) {
+            configTime("UTC0", "pool.ntp.org", "time.google.com"); // SPEC 83
+            ntpStarted = true;
+        }
+    }
+    if (ntpStarted && !ntpSynced && time(nullptr) > 1600000000) {
+        ntpSynced = true;
+        Serial.printf("[NTP] time ok: %lld\n", static_cast<long long>(time(nullptr)));
+    }
+
     switch (btnMute.tick(now)) {
         case ButtonController::Event::LongPress: muteNow(true); break;
         case ButtonController::Event::Release:
@@ -402,9 +381,9 @@ void loop() {
             break;
         default: break;
     }
-    if (btnTest.tick(now) == ButtonController::Event::LongPress) { // SPEC 54: hold 2 s
+    if (btnTest.tick(now) == ButtonController::Event::LongPress) { // SPEC 54
         notify.manualTest(now);
-        Serial.println("[TEST] button");
+        eventLog.log(LogEvent::Test, "source=button");
     }
 
     const bool siren = notify.tick(now);
@@ -412,18 +391,17 @@ void loop() {
     relay.tick(siren, now);
     if (relay.safetyTripped() && !trippedBefore)
         eventLog.log(LogEvent::RelaySafetyTrip); // Invariant 2 fired
+
     updateLed(relay.isOn());
     led.tick(now);
 
-    if (!ready) return;
-
-    if (static_cast<int32_t>(now - nextPollAt) >= 0) doPoll();
+    if (apiReady() && static_cast<int32_t>(now - nextPollAt) >= 0) doPoll();
 
     static uint32_t lastBeat = 0;
     if (now - lastBeat >= 30000) {
         lastBeat = now;
-        Serial.printf("[SYS] uptime=%lus heap=%u active=%d stale=%d online=%d relay=%d muted=%d\n",
-                      (unsigned long)(now / 1000), ESP.getFreeHeap(),
+        Serial.printf("[SYS] uptime=%lus heap=%u wifi=%d active=%d stale=%d online=%d relay=%d muted=%d\n",
+                      (unsigned long)(now / 1000), ESP.getFreeHeap(), wifi.online(),
                       engine.anyActive(), health.stale(now), health.online(),
                       relay.isOn(), notify.muted());
     }

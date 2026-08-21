@@ -17,7 +17,8 @@ jobs:
         run: |
           SIZE=$(stat -c%s .pio/build/nodemcuv2_prod/firmware.bin)
           echo "prod firmware: $SIZE bytes"
-          # OTA needs free sketch space >= image size; 1019KB total sketch region
-          test "$SIZE" -le 500000 || { echo "::error::firmware exceeds OTA budget"; exit 1; }
+          # 4M2M layout: OTA staging = 2MB - sketch (plenty); the binding limit
+          # is the linkable IROM region (~1019KB). Gate at 900KB for margin.
+          test "$SIZE" -le 900000 || { echo "::error::firmware exceeds OTA budget"; exit 1; }
       - name: SHA-256
         run: sha256sum .pio/build/nodemcuv2_prod/firmware.bin

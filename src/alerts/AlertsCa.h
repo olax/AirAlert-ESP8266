@@ -1,9 +1,9 @@
 #pragma once
-// Trust anchors for api.alerts.in.ua (SPEC 85).
-// Chain observed 2026-08-21: leaf <- GTS WE1 <- GTS Root R4.
-// All four GTS roots are pinned so Google-side rotation (R1..R4) survives
-// without an OTA. If alerts.in.ua ever changes CA vendor, this file and a
-// firmware update are required - documented in docs/RESEARCH.md.
+// Trust anchors for api.alerts.in.ua ONLY (SPEC 85): the 4 GTS roots.
+// Deliberately narrow - a wider bundle (see CaBundle.h) parses to ~8 RSA-4096
+// trust anchors and starves the heap during the poll-path TLS handshake
+// (observed StoreProhibited crash). OTA URL uses the wide bundle instead:
+// during OTA everything else is stopped, so heap is available (Invariant 8).
 #include <pgmspace.h>
 
 static const char ALERTS_CA_PEM[] PROGMEM = R"CERT(

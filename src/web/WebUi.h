@@ -10,6 +10,7 @@
 #include "config/ConfigStore.h"
 #include "config/SecretsStore.h"
 #include "hardware/RelayController.h"
+#include "network/WifiService.h"
 #include "storage/EventLogStore.h"
 
 class WebUi {
@@ -23,10 +24,12 @@ public:
         ConfigStore* configStore;
         SecretsStore* secrets;
         EventLogStore* log;
+        WifiService* wifi;
         std::function<void()> applyConfig;      // config -> subsystems
         std::function<void(const String&)> setApiToken;
         std::function<void(bool)> mute;         // arg: long/snooze
         std::function<void()> unmute;
+        std::function<void()> prepareOta;       // Invariant 8: relay off, queue clear
     };
 
     void begin(const Deps& d);
@@ -50,6 +53,10 @@ private:
     void handleTokenPut();
     void handleEvents();
     void handleSystem();
+    void handleScan();
+    void handleSetup();
+    void handleOtaUpload();
+    void handleOtaUrl();
 
     Deps d_;
     ESP8266WebServer server_{80};

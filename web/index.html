@@ -128,6 +128,24 @@ button.btn.warn{background:#a35b18}button.btn.bad{background:#a33030}button.btn.
 </div>
 </section>
 
+<section id="t-ota" class="hide">
+<div class="card">
+<h2>Оновлення прошивки (OTA)</h2>
+<div class="warnbox">⚠ Під час оновлення реле примусово вимикається, сигнали зупиняються.
+Не вимикайте живлення до завершення.</div>
+<label>Файл firmware.bin</label>
+<input id="otafile" type="file" accept=".bin">
+<div style="margin-top:8px"><button class="btn warn" onclick="otaUpload()">Завантажити прошивку</button></div>
+<hr style="border-color:#2a3038;margin:16px 0">
+<label>Або HTTPS URL образу</label>
+<input id="otaurl" placeholder="https://…/firmware.bin">
+<label>SHA-256 образу (обовʼязково)</label>
+<input id="otasha" placeholder="64 hex символи">
+<div style="margin-top:8px"><button class="btn warn" onclick="otaUrl()">Завантажити з URL</button></div>
+<p class="mut" id="otamsg" style="margin-top:10px"></p>
+</div>
+</section>
+
 <section id="t-log" class="hide">
 <div class="card" id="log"><h2>Журнал подій</h2><pre id="logbody">…</pre>
 <button class="btn ghost" onclick="loadLog()">Оновити</button></div>
@@ -143,7 +161,7 @@ button.btn.warn{background:#a35b18}button.btn.bad{background:#a33030}button.btn.
 
 </main>
 <script>
-const TABS={dash:"Стан",loc:"Локації",sig:"Сигнали",relay:"Реле",api:"API",log:"Журнал",sys:"Система"};
+const TABS={dash:"Стан",loc:"Локації",sig:"Сигнали",relay:"Реле",api:"API",ota:"OTA",log:"Журнал",sys:"Система"};
 const TYPES={air_raid:"Повітряна тривога",artillery_shelling:"Артобстріл",urban_fights:"Вуличні бої",chemical:"Хімічна загроза",nuclear:"Ядерна загроза",unknown:"Інша загроза"};
 let cfg=null,cat=null,selected=[],tok=sessionStorage.getItem("t");
 const $=id=>document.getElementById(id);
@@ -225,6 +243,22 @@ async function loadLog(){try{const t=await get("/api/v1/events");
  $("logbody").textContent=t.trim().split("\n").reverse().map(l=>{try{const r=JSON.parse(l);
   const ts=r.ts?new Date(r.ts*1000).toLocaleString("uk-UA",{timeZone:"Europe/Kyiv"}):"(до синхр. часу)";
   return `${ts}  ${r.event}${r.detail?"  "+r.detail:""}`}catch(e){return l}}).join("\n")||"порожньо"}catch(e){}}
+async function otaUpload(){const f=$("otafile").files[0];
+ if(!f){$("otamsg").textContent="Виберіть файл";return}
+ if(!confirm("Прошити "+f.name+" ("+Math.round(f.size/1024)+" КБ)?"))return;
+ $("otamsg").textContent="Завантаження… не закривайте сторінку";
+ try{const fd=new FormData();fd.append("firmware",f);
+  const r=await fetch("/api/v1/ota/upload",{method:"POST",headers:{"X-Auth":tok||""},body:fd});
+  const d=await r.json().catch(()=>({}));
+  $("otamsg").textContent=r.ok?"Успіх! Пристрій перезавантажується…":"Помилка: "+(d.error?d.error.message:r.status);
+ }catch(e){$("otamsg").textContent="З'єднання втрачено (можливо, пристрій перезавантажується)"}}
+async function otaUrl(){const u=$("otaurl").value.trim(),h=$("otasha").value.trim().toLowerCase();
+ if(!u.startsWith("https://")||h.length!==64){$("otamsg").textContent="Потрібні HTTPS URL і SHA-256";return}
+ if(!confirm("Завантажити прошивку з:\n"+u+" ?"))return;
+ $("otamsg").textContent="Пристрій завантажує образ… це може тривати хвилину";
+ try{await post("/api/v1/ota/url",{url:u,sha256:h});
+  $("otamsg").textContent="Успіх! Пристрій перезавантажується…"}
+ catch(e){$("otamsg").textContent="Помилка: "+e.message}}
 async function loadSys(){try{const s=await get("/api/v1/system");
  $("systbl").innerHTML=Object.entries(s).map(([k,v])=>`<tr><td class="mut">${k}</td><td>${v}</td></tr>`).join("")}catch(e){}}
 function showTab(k){document.querySelectorAll("main>section").forEach(s=>s.classList.add("hide"));
