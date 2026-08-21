@@ -1,16 +1,26 @@
 #include "AlertsClient.h"
 #include "AlertsCa.h"
 
+// SPEC 133: production hostname is immutable; a mock endpoint exists only as
+// a compile-time flag in dev builds and is unreachable from any UI.
+#ifdef AIRALERT_MOCK_URL
+static const char kAlertsUrl[] = AIRALERT_MOCK_URL;
+#else
 static const char kAlertsUrl[] = "https://api.alerts.in.ua/v1/alerts/active.json";
+#endif
 
 AlertsClient::Result AlertsClient::poll(airalert::SnapshotBuilder& builder) {
     Result r;
 
+#ifdef AIRALERT_MOCK_URL
+    WiFiClient client; // plain HTTP to the local mock only
+#else
     BearSSL::WiFiClientSecure client;
     static BearSSL::X509List ca(ALERTS_CA_PEM);
     client.setTrustAnchors(&ca);
     client.setBufferSizes(4096, 512); // SPEC 113; RX must fit TLS records
     client.setSession(&session_);
+#endif
 
     HTTPClient http;
     http.setTimeout(10000);

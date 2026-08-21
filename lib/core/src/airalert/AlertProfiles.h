@@ -1,0 +1,37 @@
+#pragma once
+#include "Pattern.h"
+#include "Types.h"
+
+namespace airalert {
+
+// Per-threat siren profile (SPEC 45-46). Values are user-editable via
+// Web UI later (Phase 6); these are the shipped defaults.
+struct AlertProfile {
+    bool enabled = true;
+    Pattern start{true, 3000, 1000, 3};
+    Pattern end{true, 1000, 1000, 2};
+    Pattern reminder{false, 1000, 1000, 2};
+    uint32_t reminderIntervalMs = 900000; // 15 min
+    uint8_t priority = 50;
+};
+
+// Default priority order per SPEC 49: nuclear > chemical > artillery > urban > air raid.
+inline AlertProfile defaultProfile(AlertType t) {
+    AlertProfile p;
+    switch (t) {
+        case AlertType::Nuclear: p.priority = 90; break;
+        case AlertType::Chemical: p.priority = 80; break;
+        case AlertType::ArtilleryShelling: p.priority = 60; break;
+        case AlertType::UrbanFights: p.priority = 55; break;
+        case AlertType::AirRaid: p.priority = 50; break;
+        default: p.priority = 40; break; // Unknown: signal, lowest priority
+    }
+    return p;
+}
+
+// SPEC 27: startup during already-active alert -> one short pulse.
+inline Pattern startupPattern() { return Pattern{true, 1000, 0, 1}; }
+// SPEC 54: manual TEST -> 500-1000 ms single relay pulse.
+inline Pattern manualTestPattern() { return Pattern{true, 600, 0, 1}; }
+
+} // namespace airalert

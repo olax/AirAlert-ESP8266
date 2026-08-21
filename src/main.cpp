@@ -9,22 +9,24 @@
 #include "airalert/AlertEngine.h"
 #include "airalert/ApiHealth.h"
 #include "airalert/BackoffPolicy.h"
+#include "airalert/NotificationEngine.h"
 #include "airalert/SnapshotBuilder.h"
 #include "alerts/AlertsClient.h"
+#include "hardware/ButtonController.h"
+#include "hardware/RelayController.h"
+#include "hardware/StatusLed.h"
 
 using namespace airalert;
 
 namespace pins {
-constexpr uint8_t RELAY = 14; // D5 (SPEC 61, 64)
-constexpr uint8_t MUTE = 12;  // D6
-constexpr uint8_t TEST = 13;  // D7
+constexpr uint8_t RELAY = 14;       // D5 (SPEC 61, 64)
+constexpr uint8_t MUTE = 12;        // D6
+constexpr uint8_t TEST = 13;        // D7
+constexpr uint8_t BUILTIN_LED = 2;  // D4, inverted
 } // namespace pins
 
-static void forceRelayOff() {
-    digitalWrite(pins::RELAY, LOW); // ACTIVE_HIGH assumed until commissioning (SPEC 39)
-    pinMode(pins::RELAY, OUTPUT);
-    digitalWrite(pins::RELAY, LOW);
-}
+constexpr bool kRelayActiveHigh = true;   // until commissioning (SPEC 39)
+constexpr uint32_t kRelayMaxOnMs = 30000; // SPEC 41
 
 // ---- dev secrets/config on LittleFS (real ConfigManager comes in Phase 5) ----
 struct DevConfig {
@@ -58,8 +60,19 @@ static AlertEngine engine;
 static SnapshotBuilder builder;
 static ApiHealth health;
 static BackoffPolicy backoff;
+static NotificationEngine notify;
+static RelayController relay;
+static ButtonController btnMute, btnTest;
+static StatusLed led;
 static uint32_t nextPollAt = 0;
 static bool ready = false;
+
+static void muteNow(bool longPress) {
+    relay.forceOff(); // Invariant 4: relay OFF before anything else
+    if (longPress) notify.muteLong(millis());
+    else notify.muteShort(millis());
+    Serial.printf("[MUTE] %s\n", longPress ? "SNOOZE" : "UNTIL_CLEAR");
+}
 
 // Dev selection until the locations UI exists: м. Київ + Київська область.
 static const Location kDevSelected[] = {
@@ -100,8 +113,46 @@ static void handleSerialLine(String line) {
                       cfg.apiToken.length() ? "configured" : "MISSING");
     } else if (line == "restart") {
         ESP.restart();
+    } else if (line == "mute") {
+        muteNow(false);
+    } else if (line == "unmute") {
+        notify.unmute();
+        Serial.println("[MUTE] cleared");
+    } else if (line == "test") { // SPEC 54: short relay pulse
+        notify.manualTest(millis());
+        Serial.println("[TEST] manual test queued");
+    } else if (line.startsWith("sim ")) {
+#ifdef AIRALERT_DEV
+        // dev-only: inject a snapshot to exercise engine->notify->relay
+        // with real timing on real hardware (SPEC 199 "safe test load")
+        AlertEngine::Snapshot snap{};
+        const int sp = line.indexOf(' ', 4);
+        const String typeStr = sp > 0 ? line.substring(4, sp) : line.substring(4);
+        const String covStr = sp > 0 ? line.substring(sp + 1) : "none";
+        const AlertType t = alertTypeFromString(typeStr.c_str());
+        Coverage cov = Coverage::None;
+        if (covStr == "full") cov = Coverage::Full;
+        else if (covStr == "partial") cov = Coverage::Partial;
+        snap.types[static_cast<uint8_t>(t)] = {cov, static_cast<uint8_t>(cov != Coverage::None), 1755763200};
+        const bool firstSync = !engine.synced();
+        EngineEvent ev[8];
+        const size_t n = engine.applySnapshot(snap, ev, 8);
+        for (size_t i = 0; i < n; ++i) {
+            Serial.printf("[ALARM] %s type=%s (SIM)\n", eventName(ev[i].kind),
+                          alertTypeToString(ev[i].type));
+            notify.onEngineEvent(ev[i], firstSync, millis());
+        }
+        Serial.printf("[SIM] applied %s=%s events=%u\n", typeStr.c_str(), covStr.c_str(), n);
+        nextPollAt = millis() + 300000; // hold real polls off while simulating
+#else
+        Serial.println("[SIM] dev build only");
+#endif
+    } else if (line == "status") {
+        Serial.printf("[ST] active=%d muted=%d playing=%d relay=%d tripped=%d heap=%u\n",
+                      engine.anyActive(), notify.muted(), notify.playing(),
+                      relay.isOn(), relay.safetyTripped(), ESP.getFreeHeap());
     } else if (line.length()) {
-        Serial.println("[CFG] commands: setwifi <ssid> <pass> | settoken <t> | show | restart");
+        Serial.println("[CFG] setwifi <ssid> <pass> | settoken <t> | show | restart | mute | unmute | test | status");
     }
 }
 
@@ -119,15 +170,17 @@ static void pollSerial() {
 }
 
 void setup() {
-    forceRelayOff(); // step 1, before anything else
+    // step 1: relay safe OFF before anything else (Invariant 3)
+    relay.begin(pins::RELAY, kRelayActiveHigh, kRelayMaxOnMs);
 
     Serial.begin(115200);
     Serial.println();
     Serial.printf("[BOOT] AirAlert-ESP8266 %s (%s)\n", AIRALERT_VERSION, __DATE__);
     Serial.printf("[BOOT] reset reason: %s\n", ESP.getResetReason().c_str());
 
-    pinMode(pins::MUTE, INPUT_PULLUP);
-    pinMode(pins::TEST, INPUT_PULLUP);
+    btnMute.begin(pins::MUTE);
+    btnTest.begin(pins::TEST);
+    led.begin(pins::BUILTIN_LED, true);
 
     if (!LittleFS.begin()) Serial.println("[FS] LittleFS mount failed");
 
@@ -189,11 +242,14 @@ static void doPoll() {
         case Kind::Ok: {
             health.onContact(millis());
             oc = BackoffPolicy::Outcome::Success;
+            const bool firstSync = !engine.synced(); // SPEC 26
             EngineEvent ev[8];
             const size_t n = engine.applySnapshot(builder.snapshot(), ev, 8); // SPEC 168
-            for (size_t i = 0; i < n; ++i)
+            for (size_t i = 0; i < n; ++i) {
                 Serial.printf("[ALARM] %s type=%s\n", eventName(ev[i].kind),
                               alertTypeToString(ev[i].type));
+                notify.onEngineEvent(ev[i], firstSync, millis());
+            }
             Serial.printf("[API] 200 ok alerts=%u skipped=%u active=%d latency=%lums heap=%u\n",
                           res.stats.total, res.stats.skipped, engine.anyActive(),
                           (unsigned long)latency, ESP.getFreeHeap());
@@ -237,17 +293,51 @@ static void doPoll() {
     nextPollAt = millis() + delayMs;
 }
 
+static void updateLed(bool sirenOn) {
+    using Mode = StatusLed::Mode;
+    if (sirenOn) { led.setMode(Mode::SirenOn); return; }
+    if (!engine.anyActive()) { led.setMode(Mode::Off); return; }
+    if (notify.muted()) { led.setMode(Mode::Muted); return; } // SPEC 51
+    bool full = false;
+    for (uint8_t i = 0; i < kAlertTypeCount; ++i)
+        if (engine.status(static_cast<AlertType>(i)).coverage == Coverage::Full)
+            full = true;
+    led.setMode(full ? Mode::AlertFull : Mode::AlertPartial);
+}
+
+// SPEC 116: non-blocking tick pipeline
 void loop() {
+    const uint32_t now = millis();
     pollSerial();
+
+    // buttons work even before Wi-Fi/API are ready
+    switch (btnMute.tick(now)) {
+        case ButtonController::Event::LongPress: muteNow(true); break;
+        case ButtonController::Event::Release:
+            if (btnMute.wasShortPress()) muteNow(false);
+            break;
+        default: break;
+    }
+    if (btnTest.tick(now) == ButtonController::Event::LongPress) { // SPEC 54: hold 2 s
+        notify.manualTest(now);
+        Serial.println("[TEST] button");
+    }
+
+    const bool siren = notify.tick(now);
+    relay.tick(siren, now);
+    updateLed(relay.isOn());
+    led.tick(now);
+
     if (!ready) return;
 
-    if (static_cast<int32_t>(millis() - nextPollAt) >= 0) doPoll();
+    if (static_cast<int32_t>(now - nextPollAt) >= 0) doPoll();
 
     static uint32_t lastBeat = 0;
-    if (millis() - lastBeat >= 30000) {
-        lastBeat = millis();
-        Serial.printf("[SYS] uptime=%lus heap=%u active=%d stale=%d online=%d\n",
-                      (unsigned long)(millis() / 1000), ESP.getFreeHeap(),
-                      engine.anyActive(), health.stale(millis()), health.online());
+    if (now - lastBeat >= 30000) {
+        lastBeat = now;
+        Serial.printf("[SYS] uptime=%lus heap=%u active=%d stale=%d online=%d relay=%d muted=%d\n",
+                      (unsigned long)(now / 1000), ESP.getFreeHeap(),
+                      engine.anyActive(), health.stale(now), health.online(),
+                      relay.isOn(), notify.muted());
     }
 }
