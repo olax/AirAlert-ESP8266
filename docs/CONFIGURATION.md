@@ -1,0 +1,23 @@
+# Конфігурація
+
+Все редагується у Web UI; це довідка відповідностей.
+
+`/config.json` (LittleFS, атомарний запис tmp→validate→rename):
+
+| Ключ | Default | Межі | Що робить |
+|---|---|---|---|
+| alerts.poll_sec | 15 | 10–600 | інтервал опитування API |
+| alerts.stale_sec | 60 | 30–600 | коли дані вважати застарілими |
+| alerts.start_conf / end_conf | 1 / 2 | 1–5 / 1–10 | підтверджень на старт/кінець |
+| alerts.partial_active/siren/led | true | — | політика часткової тривоги |
+| relay.active_high | true | — | полярність (визначити при commissioning!) |
+| relay.max_on_ms | 30000 | 1000–60000 | safety-ліміт безперервного УВІМК |
+| relay.test_ms | 600 | 100–1000 | тривалість тесту |
+| mute.snooze_min | 15 | 1–240 | довгий тиск MUTE |
+| mute.all_types | false | — | mute глушить і нові типи загроз |
+| startup.cooldown_sec | 300 | — | анти-reboot-loop пауза |
+| locations[] | Київ+обл | ≤16 | вибрані локації |
+| profiles.<type> | SPEC 45 | on/off ≤60с, repeat ≤20 | патерни start/end/reminder + пріоритет |
+
+Валідація — на пристрої (SPEC 155); UI-обмеження лише зручність.
+Невідомі ключі ігноруються, відсутні — дефолтяться (міграція вперед, SPEC 90).
