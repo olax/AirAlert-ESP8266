@@ -23,8 +23,11 @@ public:
     }
     void setMuteConfig(const MuteState::Config& c) { mute_.setConfig(c); }
 
-    // firstSync: boot into an already-active alert -> SHORT notification (SPEC 26).
-    void onEngineEvent(const EngineEvent& ev, bool firstSync, uint32_t nowMs);
+    // How a Started event is voiced (SPEC 26-28):
+    //   Normal - full START pattern; Short - one startup pulse (boot into an
+    //   already-active alert); Silent - reboot-loop cooldown active, no sound.
+    enum class StartupMode : uint8_t { Normal, Short, Silent };
+    void onEngineEvent(const EngineEvent& ev, StartupMode mode, uint32_t nowMs);
 
     void muteShort(uint32_t nowMs) { doMute(MuteState::Scope::UntilClear, nowMs); }
     void muteLong(uint32_t nowMs) { doMute(MuteState::Scope::Snooze, nowMs); }
@@ -83,7 +86,7 @@ private:
     uint32_t lastReminderAt_[kAlertTypeCount] = {};
 };
 
-inline void NotificationEngine::onEngineEvent(const EngineEvent& ev, bool firstSync,
+inline void NotificationEngine::onEngineEvent(const EngineEvent& ev, StartupMode mode,
                                               uint32_t nowMs) {
     const uint8_t bit = 1u << static_cast<uint8_t>(ev.type);
     const AlertProfile& p = prof(ev.type);
@@ -91,8 +94,8 @@ inline void NotificationEngine::onEngineEvent(const EngineEvent& ev, bool firstS
         case AlertEvent::Started:
             activeMask_ |= bit;
             lastReminderAt_[static_cast<uint8_t>(ev.type)] = nowMs;
-            if (!p.enabled) break;
-            if (firstSync) {
+            if (!p.enabled || mode == StartupMode::Silent) break; // SPEC 28
+            if (mode == StartupMode::Short) {
                 queue_.push({Signal::StartupActive, ev.type, p.priority}); // SPEC 26
             } else {
                 queue_.push({Signal::Start, ev.type, p.priority});

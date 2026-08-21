@@ -10,7 +10,7 @@ static EngineEvent ended(AlertType t) { return {AlertEvent::Ended, t}; }
 
 void test_start_plays_start_pattern() {
     NotificationEngine n;
-    n.onEngineEvent(started(AlertType::AirRaid), false, 0);
+    n.onEngineEvent(started(AlertType::AirRaid), NotificationEngine::StartupMode::Normal, 0);
     TEST_ASSERT_TRUE(n.tick(0));      // ON (3000 ms phase)
     TEST_ASSERT_TRUE(n.tick(2999));
     TEST_ASSERT_FALSE(n.tick(3500));  // OFF gap
@@ -19,7 +19,7 @@ void test_start_plays_start_pattern() {
 
 void test_startup_active_is_short() { // SPEC 26-27
     NotificationEngine n;
-    n.onEngineEvent(started(AlertType::AirRaid), true, 0);
+    n.onEngineEvent(started(AlertType::AirRaid), NotificationEngine::StartupMode::Short, 0);
     TEST_ASSERT_TRUE(n.tick(0));
     TEST_ASSERT_FALSE(n.tick(1000)); // single 1000 ms pulse, done
     TEST_ASSERT_FALSE(n.playing());
@@ -27,7 +27,7 @@ void test_startup_active_is_short() { // SPEC 26-27
 
 void test_mute_silences_immediately() { // Invariant 4
     NotificationEngine n;
-    n.onEngineEvent(started(AlertType::AirRaid), false, 0);
+    n.onEngineEvent(started(AlertType::AirRaid), NotificationEngine::StartupMode::Normal, 0);
     TEST_ASSERT_TRUE(n.tick(0));
     n.muteShort(100);
     TEST_ASSERT_FALSE(n.tick(101));
@@ -37,27 +37,27 @@ void test_mute_silences_immediately() { // Invariant 4
 
 void test_new_type_overrides_mute() { // SPEC 53
     NotificationEngine n;
-    n.onEngineEvent(started(AlertType::AirRaid), false, 0);
+    n.onEngineEvent(started(AlertType::AirRaid), NotificationEngine::StartupMode::Normal, 0);
     n.tick(0);
     n.muteShort(100);
-    n.onEngineEvent(started(AlertType::Chemical), false, 200);
+    n.onEngineEvent(started(AlertType::Chemical), NotificationEngine::StartupMode::Normal, 200);
     TEST_ASSERT_TRUE(n.tick(200)); // chemical sounds despite mute
 }
 
 void test_muted_type_stays_silent_until_clear() { // SPEC 52
     NotificationEngine n;
-    n.onEngineEvent(started(AlertType::AirRaid), false, 0);
+    n.onEngineEvent(started(AlertType::AirRaid), NotificationEngine::StartupMode::Normal, 0);
     n.tick(0);
     n.muteShort(100);
     // reminder would fire but is silenced; end clears the mute
-    n.onEngineEvent(ended(AlertType::AirRaid), false, 5000);
+    n.onEngineEvent(ended(AlertType::AirRaid), NotificationEngine::StartupMode::Normal, 5000);
     TEST_ASSERT_FALSE(n.muted()); // all clear -> unmuted
     TEST_ASSERT_TRUE(n.tick(5000)); // END pattern audible
 }
 
 void test_manual_test_sounds_when_muted() { // SPEC 54
     NotificationEngine n;
-    n.onEngineEvent(started(AlertType::AirRaid), false, 0);
+    n.onEngineEvent(started(AlertType::AirRaid), NotificationEngine::StartupMode::Normal, 0);
     n.tick(0);
     n.muteShort(100);
     n.manualTest(200);
@@ -67,9 +67,9 @@ void test_manual_test_sounds_when_muted() { // SPEC 54
 
 void test_end_does_not_preempt_start() { // SPEC 47
     NotificationEngine n;
-    n.onEngineEvent(started(AlertType::AirRaid), false, 0);
+    n.onEngineEvent(started(AlertType::AirRaid), NotificationEngine::StartupMode::Normal, 0);
     TEST_ASSERT_TRUE(n.tick(0)); // start pattern playing
-    n.onEngineEvent(ended(AlertType::Chemical), false, 10); // end arrives
+    n.onEngineEvent(ended(AlertType::Chemical), NotificationEngine::StartupMode::Normal, 10); // end arrives
     TEST_ASSERT_TRUE(n.tick(100)); // start keeps playing
 }
 
@@ -79,11 +79,11 @@ void test_start_preempts_reminder() { // SPEC 47
     p.reminder = Pattern{true, 10000, 0, 1}; // long reminder to preempt
     p.reminderIntervalMs = 1000;
     n.setProfile(AlertType::AirRaid, p);
-    n.onEngineEvent(started(AlertType::AirRaid), true, 0); // short startup
+    n.onEngineEvent(started(AlertType::AirRaid), NotificationEngine::StartupMode::Short, 0); // short startup
     n.tick(0);
     n.tick(1100); // startup done
     TEST_ASSERT_TRUE(n.tick(1200)); // reminder playing (interval passed)
-    n.onEngineEvent(started(AlertType::Chemical), false, 1300);
+    n.onEngineEvent(started(AlertType::Chemical), NotificationEngine::StartupMode::Normal, 1300);
     n.tick(1300);
     TEST_ASSERT_TRUE(n.tick(1400)); // chemical start took over
     // chemical start: ON 3000 from ~1300 -> still ON at 4000
@@ -96,7 +96,7 @@ void test_reminder_interval() {
     p.reminder = Pattern{true, 500, 0, 1};
     p.reminderIntervalMs = 60000;
     n.setProfile(AlertType::AirRaid, p);
-    n.onEngineEvent(started(AlertType::AirRaid), true, 0);
+    n.onEngineEvent(started(AlertType::AirRaid), NotificationEngine::StartupMode::Short, 0);
     n.tick(0);
     n.tick(1100); // startup pulse done
     TEST_ASSERT_FALSE(n.tick(30000)); // not yet
@@ -108,7 +108,7 @@ void test_disabled_profile_no_sound() {
     AlertProfile p = defaultProfile(AlertType::AirRaid);
     p.enabled = false;
     n.setProfile(AlertType::AirRaid, p);
-    n.onEngineEvent(started(AlertType::AirRaid), false, 0);
+    n.onEngineEvent(started(AlertType::AirRaid), NotificationEngine::StartupMode::Normal, 0);
     TEST_ASSERT_FALSE(n.tick(0));
 }
 

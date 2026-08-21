@@ -9,12 +9,17 @@
 #include "airalert/AlertEngine.h"
 #include "airalert/ApiHealth.h"
 #include "airalert/BackoffPolicy.h"
+#include "airalert/Config.h"
 #include "airalert/NotificationEngine.h"
 #include "airalert/SnapshotBuilder.h"
+#include "airalert/StartupPolicy.h"
 #include "alerts/AlertsClient.h"
+#include "config/ConfigStore.h"
 #include "hardware/ButtonController.h"
 #include "hardware/RelayController.h"
 #include "hardware/StatusLed.h"
+#include "storage/EventLogStore.h"
+#include "storage/StateStore.h"
 
 using namespace airalert;
 
@@ -25,8 +30,7 @@ constexpr uint8_t TEST = 13;        // D7
 constexpr uint8_t BUILTIN_LED = 2;  // D4, inverted
 } // namespace pins
 
-constexpr bool kRelayActiveHigh = true;   // until commissioning (SPEC 39)
-constexpr uint32_t kRelayMaxOnMs = 30000; // SPEC 41
+
 
 // ---- dev secrets/config on LittleFS (real ConfigManager comes in Phase 5) ----
 struct DevConfig {
@@ -55,6 +59,11 @@ struct DevConfig {
 };
 
 static DevConfig cfg;
+static AppConfig appCfg;
+static ConfigStore configStore;
+static StateStore stateStore;
+static PersistedState pstate;
+static EventLogStore eventLog;
 static AlertsClient client;
 static AlertEngine engine;
 static SnapshotBuilder builder;
@@ -71,14 +80,21 @@ static void muteNow(bool longPress) {
     relay.forceOff(); // Invariant 4: relay OFF before anything else
     if (longPress) notify.muteLong(millis());
     else notify.muteShort(millis());
-    Serial.printf("[MUTE] %s\n", longPress ? "SNOOZE" : "UNTIL_CLEAR");
+    eventLog.log(LogEvent::Mute, longPress ? "scope=snooze" : "scope=until_clear");
 }
 
-// Dev selection until the locations UI exists: м. Київ + Київська область.
-static const Location kDevSelected[] = {
-    {31, LocationType::City, 0, 0},
-    {14, LocationType::Oblast, 0, 0},
-};
+// Config -> subsystems (SPEC 25 step 4; re-applied after Web UI edits later)
+static void applyConfig() {
+    engine.setConfig({appCfg.startConfirmations, appCfg.endConfirmations,
+                      appCfg.partialActive});
+    notify.setMuteConfig({appCfg.snoozeMinutes * 60000u, appCfg.muteAllAlertTypes});
+    for (uint8_t i = 0; i < kAlertTypeCount; ++i)
+        notify.setProfile(static_cast<AlertType>(i), appCfg.profiles[i]);
+    relay.begin(pins::RELAY, appCfg.relayActiveHigh, appCfg.relayMaxOnMs);
+    backoff.setConfig({appCfg.pollIntervalSec * 1000u, 120000, 60000, 300000, 10});
+    health.setConfig({appCfg.apiStaleAfterSec * 1000u});
+    builder.setSelected(appCfg.selected, appCfg.selectedCount);
+}
 
 static const char* eventName(AlertEvent e) {
     switch (e) {
@@ -117,10 +133,22 @@ static void handleSerialLine(String line) {
         muteNow(false);
     } else if (line == "unmute") {
         notify.unmute();
-        Serial.println("[MUTE] cleared");
+        eventLog.log(LogEvent::Unmute);
     } else if (line == "test") { // SPEC 54: short relay pulse
         notify.manualTest(millis());
-        Serial.println("[TEST] manual test queued");
+        eventLog.log(LogEvent::Test, "source=serial");
+    } else if (line == "config") {
+        JsonDocument d;
+        configToJson(appCfg, d);
+        serializeJson(d, Serial); // config never contains secrets (SPEC 91)
+        Serial.println();
+    } else if (line == "log") {
+        for (const char* path : {"/log/ev.0", "/log/ev.1"}) {
+            File f = LittleFS.open(path, "r");
+            if (!f) continue;
+            while (f.available()) Serial.write(f.read());
+            f.close();
+        }
     } else if (line.startsWith("sim ")) {
 #ifdef AIRALERT_DEV
         // dev-only: inject a snapshot to exercise engine->notify->relay
@@ -140,7 +168,10 @@ static void handleSerialLine(String line) {
         for (size_t i = 0; i < n; ++i) {
             Serial.printf("[ALARM] %s type=%s (SIM)\n", eventName(ev[i].kind),
                           alertTypeToString(ev[i].type));
-            notify.onEngineEvent(ev[i], firstSync, millis());
+            notify.onEngineEvent(ev[i],
+                                 firstSync ? NotificationEngine::StartupMode::Short
+                                           : NotificationEngine::StartupMode::Normal,
+                                 millis());
         }
         Serial.printf("[SIM] applied %s=%s events=%u\n", typeStr.c_str(), covStr.c_str(), n);
         nextPollAt = millis() + 300000; // hold real polls off while simulating
@@ -170,8 +201,9 @@ static void pollSerial() {
 }
 
 void setup() {
-    // step 1: relay safe OFF before anything else (Invariant 3)
-    relay.begin(pins::RELAY, kRelayActiveHigh, kRelayMaxOnMs);
+    // step 1: relay safe OFF before anything else (Invariant 3).
+    // Default-polarity assumption until config is loaded (SPEC 39).
+    relay.begin(pins::RELAY, true, 30000);
 
     Serial.begin(115200);
     Serial.println();
@@ -184,13 +216,21 @@ void setup() {
 
     if (!LittleFS.begin()) Serial.println("[FS] LittleFS mount failed");
 
+    if (!configStore.load(appCfg)) {
+        appCfg = AppConfig{}; // corrupt/missing -> defaults (SPEC 128)
+        Serial.println("[CFG] using default config");
+    }
+    applyConfig();
+    stateStore.load(pstate);
+    eventLog.begin();
+    eventLog.log(LogEvent::Boot, ESP.getResetReason().c_str());
+
     if (!cfg.load()) {
         Serial.println("[CFG] DEVICE NOT READY: no Wi-Fi config (SPEC 162)");
         Serial.println("[CFG] use serial: setwifi <ssid> <pass>, then settoken <token>");
         return;
     }
 
-    builder.setSelected(kDevSelected, 2);
     client.begin(cfg.apiToken);
 
     WiFi.mode(WIFI_STA);
@@ -207,6 +247,7 @@ void setup() {
     }
     Serial.printf("[WIFI] IP: %s RSSI: %d\n",
                   WiFi.localIP().toString().c_str(), WiFi.RSSI());
+    eventLog.log(LogEvent::WifiConnected);
 
     // NTP: required for TLS cert validation (SPEC 83, boot step 8)
     configTime("UTC0", "pool.ntp.org", "time.google.com");
@@ -240,15 +281,53 @@ static void doPoll() {
     BackoffPolicy::Outcome oc;
     switch (res.kind) {
         case Kind::Ok: {
+            if (!health.online()) eventLog.log(LogEvent::ApiOnline);
             health.onContact(millis());
             oc = BackoffPolicy::Outcome::Success;
             const bool firstSync = !engine.synced(); // SPEC 26
+
+            // SPEC 26-28: how loud may a boot-time Started event be?
+            auto startupMode = NotificationEngine::StartupMode::Normal;
+            if (firstSync) {
+                const uint32_t fp = StartupPolicy::fingerprint(builder.snapshot());
+                const int64_t nowUtc = time(nullptr) > 1600000000 ? time(nullptr) : 0;
+                startupMode = StartupPolicy::shouldNotify(
+                                  fp, pstate.alertFingerprint, pstate.startupNotifAtUtc,
+                                  nowUtc, appCfg.startupCooldownSec)
+                                  ? NotificationEngine::StartupMode::Short
+                                  : NotificationEngine::StartupMode::Silent;
+            }
+
             EngineEvent ev[8];
             const size_t n = engine.applySnapshot(builder.snapshot(), ev, 8); // SPEC 168
             for (size_t i = 0; i < n; ++i) {
                 Serial.printf("[ALARM] %s type=%s\n", eventName(ev[i].kind),
                               alertTypeToString(ev[i].type));
-                notify.onEngineEvent(ev[i], firstSync, millis());
+                auto mode = startupMode;
+                // SPEC 20: partial-only alert with siren disabled for partial
+                if (ev[i].kind == AlertEvent::Started && !appCfg.partialSiren &&
+                    engine.status(ev[i].type).coverage == Coverage::Partial)
+                    mode = NotificationEngine::StartupMode::Silent;
+                notify.onEngineEvent(ev[i], mode, millis());
+                switch (ev[i].kind) {
+                    case AlertEvent::Started:
+                        eventLog.log(engine.status(ev[i].type).coverage == Coverage::Full
+                                         ? LogEvent::AlertFull : LogEvent::AlertPartial,
+                                     alertTypeToString(ev[i].type));
+                        break;
+                    case AlertEvent::Ended:
+                        eventLog.log(LogEvent::AlertEnd, alertTypeToString(ev[i].type));
+                        break;
+                    default: break;
+                }
+            }
+            if (n > 0 || firstSync) { // SPEC 96: write only on change
+                pstate.alertFingerprint = StartupPolicy::fingerprint(builder.snapshot());
+                if (firstSync && startupMode == NotificationEngine::StartupMode::Short)
+                    pstate.startupNotifAtUtc = time(nullptr);
+                else if (n > 0)
+                    pstate.startupNotifAtUtc = time(nullptr); // START played counts too
+                stateStore.save(pstate);
             }
             Serial.printf("[API] 200 ok alerts=%u skipped=%u active=%d latency=%lums heap=%u\n",
                           res.stats.total, res.stats.skipped, engine.anyActive(),
@@ -264,24 +343,25 @@ static void doPoll() {
         case Kind::AuthError:
             health.onFailure();
             oc = BackoffPolicy::Outcome::AuthError;
-            Serial.println("[API] API_AUTH_ERROR 401 - check token (SPEC 163)");
+            eventLog.log(LogEvent::Api401);
             break;
         case Kind::Forbidden:
             health.onFailure();
             oc = BackoffPolicy::Outcome::AuthError;
-            Serial.println("[API] API_ACCESS_FORBIDDEN 403 (SPEC 164)");
+            eventLog.log(LogEvent::Api403);
             break;
         case Kind::RateLimited:
             health.onFailure();
             oc = BackoffPolicy::Outcome::RateLimited;
-            Serial.printf("[API] API_RATE_LIMIT 429 retry-after=%us\n", res.retryAfterSec);
+            eventLog.log(LogEvent::Api429);
             break;
         case Kind::ParseError:
             health.onFailure(); // snapshot NOT applied - Invariant 6
             oc = BackoffPolicy::Outcome::ParseError;
-            Serial.println("[API] API_PARSE_ERROR - keeping previous state");
+            eventLog.log(LogEvent::ApiParseError);
             break;
         default:
+            if (health.online()) eventLog.log(LogEvent::ApiOffline);
             health.onFailure();
             oc = BackoffPolicy::Outcome::NetError;
             Serial.printf("[API] API_OFFLINE code=%d heap=%u\n", res.httpCode, ESP.getFreeHeap());
@@ -324,7 +404,10 @@ void loop() {
     }
 
     const bool siren = notify.tick(now);
+    const bool trippedBefore = relay.safetyTripped();
     relay.tick(siren, now);
+    if (relay.safetyTripped() && !trippedBefore)
+        eventLog.log(LogEvent::RelaySafetyTrip); // Invariant 2 fired
     updateLed(relay.isOn());
     led.tick(now);
 
