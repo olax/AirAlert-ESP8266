@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AirAlert</title>
+<style>
+:root{--bg:#111418;--card:#1b2026;--tx:#e8eaed;--mut:#9aa3ad;--ok:#2ea86c;--warn:#e0a53c;--bad:#e05252;--acc:#4d9fec}
+*{box-sizing:border-box;margin:0}
+body{background:var(--bg);color:var(--tx);font:15px/1.45 system-ui,sans-serif;padding-bottom:40px}
+header{padding:14px 16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+h1{font-size:19px}h2{font-size:16px;margin-bottom:10px}
+.badges{display:flex;gap:6px;flex-wrap:wrap}
+.b{padding:2px 9px;border-radius:10px;font-size:12px;background:#333;color:#ccc}
+.b.ok{background:#173527;color:#7fd6a6}.b.warn{background:#3a2f14;color:#eec97a}.b.bad{background:#3c1b1b;color:#f09a9a}
+nav{display:flex;gap:2px;padding:0 12px;flex-wrap:wrap;border-bottom:1px solid #2a3038}
+nav button{background:none;border:0;color:var(--mut);padding:9px 13px;font-size:14px;cursor:pointer;border-bottom:2px solid transparent}
+nav button.on{color:var(--tx);border-color:var(--acc)}
+main{padding:14px;max-width:760px;margin:0 auto}
+.card{background:var(--card);border-radius:10px;padding:14px;margin-bottom:12px}
+.big{font-size:26px;font-weight:700;padding:18px;text-align:center;border-radius:10px}
+.big.clear{background:#173527}.big.alert{background:#5c1f1f;animation:pulse 2s infinite}.big.unknown{background:#333}.big.stale{background:#3a2f14}
+@keyframes pulse{50%{opacity:.75}}
+table{width:100%;border-collapse:collapse}
+td,th{padding:6px 8px;text-align:left;border-bottom:1px solid #2a3038;font-size:14px}
+input,select{background:#12161b;color:var(--tx);border:1px solid #333c46;border-radius:6px;padding:7px 9px;font-size:14px;width:100%}
+input[type=checkbox]{width:auto}
+label{display:block;margin:8px 0 3px;color:var(--mut);font-size:13px}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.row>*{flex:1}
+button.btn{background:var(--acc);color:#fff;border:0;border-radius:7px;padding:9px 16px;font-size:14px;cursor:pointer}
+button.btn.warn{background:#a35b18}button.btn.bad{background:#a33030}button.btn.ghost{background:#2a3138}
+.mut{color:var(--mut);font-size:13px}
+.loc{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:6px}
+.loc:hover{background:#232a32}
+.loc.child{margin-left:22px}
+#log pre{font-size:12px;overflow-x:auto;white-space:pre-wrap;color:#b9c2cc}
+#login{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;z-index:9}
+#login .card{width:320px}
+.hide{display:none!important}
+.warnbox{background:#3a2414;border:1px solid #7a5220;border-radius:8px;padding:10px;margin:10px 0;font-size:13.5px}
+</style>
+</head>
+<body>
+<div id="login"><div class="card">
+<h2>AirAlert — вхід</h2>
+<label>Пароль адміністратора</label>
+<input id="pw" type="password" autocomplete="current-password">
+<div style="margin-top:12px"><button class="btn" onclick="login()">Увійти</button></div>
+<p class="mut" id="loginmsg" style="margin-top:8px"></p>
+</div></div>
+
+<header>
+<h1>🚨 AirAlert</h1>
+<div class="badges" id="badges"></div>
+</header>
+<nav id="tabs"></nav>
+<main>
+
+<section id="t-dash">
+<div id="alertbox" class="big unknown">…</div>
+<div id="stalebox" class="warnbox hide"></div>
+<div class="card"><table id="alerttbl"></table></div>
+<div class="card row">
+<button class="btn warn" onclick="post('/api/v1/mute').then(refresh)">🔇 Заглушити</button>
+<button class="btn ghost" onclick="post('/api/v1/unmute').then(refresh)">🔊 Увімкнути звук</button>
+<button class="btn bad" onclick="relayOff()">⛔ Реле ВИМК</button>
+</div>
+<div class="card" id="dashinfo"></div>
+</section>
+
+<section id="t-loc" class="hide">
+<div class="card">
+<h2>Локації спостереження</h2>
+<p class="mut">Тривога по області або району вмикає сирену. Вибрано: <span id="selcount"></span></p>
+<input id="locsearch" placeholder="Пошук…" oninput="renderLocs()">
+<div id="loclist" style="margin-top:8px;max-height:420px;overflow-y:auto"></div>
+<div style="margin-top:10px"><button class="btn" onclick="saveLocs()">Зберегти локації</button></div>
+</div>
+</section>
+
+<section id="t-sig" class="hide">
+<div class="card">
+<h2>Профілі загроз</h2>
+<label>Тип загрози</label>
+<select id="ptype" onchange="renderProfile()"></select>
+<div id="profform"></div>
+<div style="margin-top:10px"><button class="btn" onclick="saveConfig()">Зберегти</button></div>
+</div>
+</section>
+
+<section id="t-relay" class="hide">
+<div class="card">
+<h2>Реле / Сирена</h2>
+<div class="warnbox">⚠ УВАГА: «Тест реле» фізично вмикає реле і все, що до нього підключене.</div>
+<label>Полярність</label>
+<select id="r_ah"><option value="1">ACTIVE HIGH</option><option value="0">ACTIVE LOW</option></select>
+<label>Макс. безперервно УВІМК, мс (1000–60000)</label>
+<input id="r_max" type="number" min="1000" max="60000">
+<label>Тривалість тесту, мс (100–1000)</label>
+<input id="r_test" type="number" min="100" max="1000">
+<div class="row" style="margin-top:12px">
+<button class="btn" onclick="saveConfig()">Зберегти</button>
+<button class="btn warn" onclick="testRelay()">⚡ Тест реле</button>
+</div>
+</div>
+<div class="card">
+<h2>Часткова тривога</h2>
+<div class="row"><label><input type="checkbox" id="p_act"> Враховувати часткову</label></div>
+<div class="row"><label><input type="checkbox" id="p_sir"> Сирена для часткової</label></div>
+<div class="row"><label><input type="checkbox" id="p_led"> LED для часткової</label></div>
+<button class="btn" onclick="saveConfig()">Зберегти</button>
+</div>
+</section>
+
+<section id="t-api" class="hide">
+<div class="card">
+<h2>API alerts.in.ua</h2>
+<p>Токен: <b id="tokstate">…</b></p>
+<label>Новий API токен (write-only, не відображається)</label>
+<input id="newtok" type="password" autocomplete="off">
+<div style="margin-top:8px"><button class="btn" onclick="saveToken()">Зберегти токен</button></div>
+<label>Інтервал опитування, с (10–600)</label>
+<input id="a_poll" type="number" min="10" max="600">
+<label>Дані застарілі після, с</label>
+<input id="a_stale" type="number" min="30" max="600">
+<div style="margin-top:8px"><button class="btn" onclick="saveConfig()">Зберегти</button></div>
+</div>
+</section>
+
+<section id="t-log" class="hide">
+<div class="card" id="log"><h2>Журнал подій</h2><pre id="logbody">…</pre>
+<button class="btn ghost" onclick="loadLog()">Оновити</button></div>
+</section>
+
+<section id="t-sys" class="hide">
+<div class="card"><h2>Система</h2><table id="systbl"></table>
+<div class="row" style="margin-top:10px">
+<button class="btn ghost" onclick="loadSys()">Оновити</button>
+<button class="btn bad" onclick="if(confirm('Перезавантажити пристрій?'))post('/api/v1/reboot')">Перезавантажити</button>
+</div></div>
+</section>
+
+</main>
+<script>
+const TABS={dash:"Стан",loc:"Локації",sig:"Сигнали",relay:"Реле",api:"API",log:"Журнал",sys:"Система"};
+const TYPES={air_raid:"Повітряна тривога",artillery_shelling:"Артобстріл",urban_fights:"Вуличні бої",chemical:"Хімічна загроза",nuclear:"Ядерна загроза",unknown:"Інша загроза"};
+let cfg=null,cat=null,selected=[],tok=sessionStorage.getItem("t");
+const $=id=>document.getElementById(id);
+const hdrs=()=>({"Content-Type":"application/json","X-Auth":tok||""});
+async function req(m,u,b){const r=await fetch(u,{method:m,headers:hdrs(),body:b?JSON.stringify(b):undefined});
+ if(r.status===401){sessionStorage.removeItem("t");$("login").classList.remove("hide");throw new Error("auth")}
+ if(!r.ok){const e=await r.json().catch(()=>({}));throw new Error(e.error?e.error.message:r.status)}
+ const ct=r.headers.get("content-type")||"";return ct.includes("json")?r.json():r.text()}
+const get=u=>req("GET",u),post=(u,b)=>req("POST",u,b),put=(u,b)=>req("PUT",u,b);
+async function login(){try{const r=await fetch("/api/v1/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({password:$("pw").value})});
+ if(!r.ok){$("loginmsg").textContent=r.status===429?"Забагато спроб — зачекайте хвилину":"Невірний пароль";return}
+ tok=(await r.json()).token;sessionStorage.setItem("t",tok);$("login").classList.add("hide");init()}catch(e){$("loginmsg").textContent="Помилка з'єднання"}}
+$("pw").addEventListener("keydown",e=>{if(e.key==="Enter")login()});
+function badge(n,cls){return `<span class="b ${cls}">${n}</span>`}
+async function refresh(){try{const s=await get("/api/v1/status");
+ const b=[];b.push(badge("Wi-Fi "+(s.wifi.connected?s.wifi.rssi+" dBm":"—"),s.wifi.connected?"ok":"bad"));
+ b.push(badge("API",s.api.online?"ok":"bad"));b.push(badge(s.api.stale?"Дані застарілі":"Дані свіжі",s.api.stale?"warn":"ok"));
+ if(s.alerts.muted)b.push(badge("🔇 Заглушено","warn"));if(s.relay.active)b.push(badge("РЕЛЕ УВІМК","bad"));
+ if(s.relay.tripped)b.push(badge("Захист реле!","bad"));$("badges").innerHTML=b.join("");
+ const ab=$("alertbox");
+ if(!s.api.ever_synced){ab.className="big unknown";ab.textContent="Очікування першої синхронізації…"}
+ else if(s.alerts.active){ab.className="big alert";ab.textContent="🔴 "+(s.alerts.types.map(t=>TYPES[t.type]||t.type).join(" + "))}
+ else{ab.className="big clear";ab.textContent="Тривог немає"}
+ const sb=$("stalebox");
+ if(s.api.stale&&s.api.ever_synced){sb.classList.remove("hide");
+  sb.innerHTML=`⚠ Немає актуальних даних (${s.api.last_contact_sec} с тому). Останній відомий стан ${s.alerts.active?"— <b>ТРИВОГА</b>":"— тривог не було"}.`}
+ else sb.classList.add("hide");
+ $("alerttbl").innerHTML=s.alerts.types.length?
+  "<tr><th>Загроза</th><th>Охоплення</th><th>Початок</th><th>Тривалість</th></tr>"+s.alerts.types.map(t=>{
+   const st=t.started_at?new Date(t.started_at*1000).toLocaleTimeString("uk-UA",{timeZone:"Europe/Kyiv",hour:"2-digit",minute:"2-digit"}):"—";
+   const d=t.started_at?fmtDur(Math.floor(Date.now()/1000-t.started_at)):"—";
+   return `<tr><td>${TYPES[t.type]||t.type}</td><td>${t.coverage==="full"?"повна":"часткова"}</td><td>${st}</td><td>${d}</td></tr>`}).join("")
+  :"<tr><td class='mut'>Активних тривог у вибраних локаціях немає</td></tr>";
+ $("dashinfo").innerHTML=`<span class="mut">Прошивка ${s.firmware} · Аптайм ${fmtDur(s.uptime_sec)} · Останній контакт з API ${s.api.last_contact_sec===null?"—":s.api.last_contact_sec+" с тому"} · Опитування кожні ${cfg?cfg.alerts.poll_sec:"…"} с</span>`;
+}catch(e){}}
+function fmtDur(s){if(s<0||s==null)return"—";const h=Math.floor(s/3600),m=Math.floor(s%3600/60);return h?`${h} год ${m} хв`:m?`${m} хв`:`${s} с`}
+async function loadCfg(){cfg=await get("/api/v1/config");
+ $("r_ah").value=cfg.relay.active_high?"1":"0";$("r_max").value=cfg.relay.max_on_ms;$("r_test").value=cfg.relay.test_ms;
+ $("p_act").checked=cfg.alerts.partial_active;$("p_sir").checked=cfg.alerts.partial_siren;$("p_led").checked=cfg.alerts.partial_led;
+ $("a_poll").value=cfg.alerts.poll_sec;$("a_stale").value=cfg.alerts.stale_sec;
+ selected=(cfg.locations||[]).map(l=>l.uid);
+ const sel=$("ptype");sel.innerHTML=Object.keys(cfg.profiles).map(k=>`<option value="${k}">${TYPES[k]||k}</option>`).join("");
+ renderProfile()}
+function pf(name,p){return `<fieldset style="border:1px solid #333c46;border-radius:8px;padding:8px;margin-top:10px"><legend class="mut">${name}</legend>
+ <div class="row"><label><input type="checkbox" data-p="${name}.enabled" ${p.enabled?"checked":""}> Увімкнено</label></div>
+ <div class="row"><div><label>УВІМК, мс</label><input type="number" data-p="${name}.on_ms" value="${p.on_ms}"></div>
+ <div><label>ВИМК, мс</label><input type="number" data-p="${name}.off_ms" value="${p.off_ms}"></div>
+ <div><label>Повторів</label><input type="number" data-p="${name}.repeat" value="${p.repeat}"></div></div></fieldset>`}
+function renderProfile(){const k=$("ptype").value,p=cfg.profiles[k];
+ $("profform").innerHTML=`<div class="row"><label><input type="checkbox" id="pr_en" ${p.enabled?"checked":""}> Загроза активує сигнали</label></div>
+ <label>Пріоритет (0–255)</label><input id="pr_pri" type="number" min="0" max="255" value="${p.priority}">
+ ${pf("start",p.start)}${pf("end",p.end)}${pf("reminder",p.reminder)}
+ <label>Інтервал нагадування, с (≥30)</label><input id="pr_int" type="number" min="30" value="${p.reminder.interval_sec}">`}
+function collectProfile(){const k=$("ptype").value,p=cfg.profiles[k];
+ p.enabled=$("pr_en").checked;p.priority=+$("pr_pri").value;p.reminder.interval_sec=+$("pr_int").value;
+ document.querySelectorAll("[data-p]").forEach(el=>{const[sec,f]=el.dataset.p.split(".");
+  p[sec][f]=el.type==="checkbox"?el.checked:+el.value})}
+async function saveConfig(){try{if(cfg.profiles&&$("profform").innerHTML)collectProfile();
+ cfg.relay.active_high=$("r_ah").value==="1";cfg.relay.max_on_ms=+$("r_max").value;cfg.relay.test_ms=+$("r_test").value;
+ cfg.alerts.partial_active=$("p_act").checked;cfg.alerts.partial_siren=$("p_sir").checked;cfg.alerts.partial_led=$("p_led").checked;
+ cfg.alerts.poll_sec=+$("a_poll").value;cfg.alerts.stale_sec=+$("a_stale").value;
+ await put("/api/v1/config",cfg);alert("Збережено");refresh()}catch(e){alert("Помилка: "+e.message)}}
+async function loadCat(){cat=(await get("/locations.json")).locations;renderLocs()}
+function renderLocs(){const q=($("locsearch").value||"").toLowerCase();
+ $("selcount").textContent=selected.length;
+ $("loclist").innerHTML=cat.filter(l=>!q||l.name.toLowerCase().includes(q)).map(l=>
+  `<div class="loc ${l.type==="raion"?"child":""}"><input type="checkbox" ${selected.includes(l.uid)?"checked":""} onchange="togLoc(${l.uid},this.checked)"><span>${l.name}</span></div>`).join("")}
+function togLoc(u,on){if(on&&!selected.includes(u))selected.push(u);if(!on)selected=selected.filter(x=>x!==u);$("selcount").textContent=selected.length}
+async function saveLocs(){try{const locs=selected.map(u=>{const l=cat.find(x=>x.uid===u);
+  return {uid:u,type:l.type,oblast_uid:l.oblast_uid||0,raion_uid:0}});
+ await put("/api/v1/locations",{locations:locs});alert("Збережено");loadCfg()}catch(e){alert("Помилка: "+e.message)}}
+async function saveToken(){const t=$("newtok").value.trim();if(!t)return;
+ try{await put("/api/v1/secrets/api-token",{token:t});$("newtok").value="";alert("Токен збережено");loadTok()}catch(e){alert("Помилка: "+e.message)}}
+async function loadTok(){try{const s=await get("/api/v1/status");$("tokstate").textContent=s.api.token_present?"налаштовано":"ВІДСУТНІЙ"}catch(e){}}
+async function testRelay(){if(!confirm("Фізично увімкнути реле на "+$("r_test").value+" мс?"))return;
+ try{await post("/api/v1/test/relay")}catch(e){alert("Помилка: "+e.message)}}
+async function relayOff(){try{await post("/api/v1/relay/off");refresh()}catch(e){}}
+async function loadLog(){try{const t=await get("/api/v1/events");
+ $("logbody").textContent=t.trim().split("\n").reverse().map(l=>{try{const r=JSON.parse(l);
+  const ts=r.ts?new Date(r.ts*1000).toLocaleString("uk-UA",{timeZone:"Europe/Kyiv"}):"(до синхр. часу)";
+  return `${ts}  ${r.event}${r.detail?"  "+r.detail:""}`}catch(e){return l}}).join("\n")||"порожньо"}catch(e){}}
+async function loadSys(){try{const s=await get("/api/v1/system");
+ $("systbl").innerHTML=Object.entries(s).map(([k,v])=>`<tr><td class="mut">${k}</td><td>${v}</td></tr>`).join("")}catch(e){}}
+function showTab(k){document.querySelectorAll("main>section").forEach(s=>s.classList.add("hide"));
+ $("t-"+k).classList.remove("hide");
+ document.querySelectorAll("nav button").forEach(b=>b.classList.toggle("on",b.dataset.k===k));
+ if(k==="log")loadLog();if(k==="sys")loadSys();if(k==="api")loadTok()}
+$("tabs").innerHTML=Object.entries(TABS).map(([k,n])=>`<button data-k="${k}" onclick="showTab('${k}')">${n}</button>`).join("");
+async function init(){$("login").classList.add("hide");await loadCfg();await loadCat();refresh();setInterval(refresh,5000);showTab("dash")}
+(async()=>{if(!tok){$("login").classList.remove("hide");return}
+ try{await get("/api/v1/status");init()}catch(e){}})();
+</script>
+</body>
+</html>

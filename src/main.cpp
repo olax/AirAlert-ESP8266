@@ -18,8 +18,11 @@
 #include "hardware/ButtonController.h"
 #include "hardware/RelayController.h"
 #include "hardware/StatusLed.h"
+#include "alerts/LocationCatalog.h"
+#include "config/SecretsStore.h"
 #include "storage/EventLogStore.h"
 #include "storage/StateStore.h"
+#include "web/WebUi.h"
 
 using namespace airalert;
 
@@ -32,38 +35,14 @@ constexpr uint8_t BUILTIN_LED = 2;  // D4, inverted
 
 
 
-// ---- dev secrets/config on LittleFS (real ConfigManager comes in Phase 5) ----
-struct DevConfig {
-    String wifiSsid, wifiPass, apiToken;
-    bool load() {
-        File f = LittleFS.open("/secrets.json", "r");
-        if (!f) return false;
-        JsonDocument d;
-        if (deserializeJson(d, f) != DeserializationError::Ok) return false;
-        wifiSsid = d["wifi_ssid"] | "";
-        wifiPass = d["wifi_pass"] | "";
-        apiToken = d["api_token"] | "";
-        return wifiSsid.length() > 0;
-    }
-    bool save() {
-        JsonDocument d;
-        d["wifi_ssid"] = wifiSsid;
-        d["wifi_pass"] = wifiPass;
-        d["api_token"] = apiToken;
-        File f = LittleFS.open("/secrets.json", "w");
-        if (!f) return false;
-        serializeJson(d, f);
-        f.close();
-        return true;
-    }
-};
-
-static DevConfig cfg;
+static SecretsStore cfg;
 static AppConfig appCfg;
 static ConfigStore configStore;
 static StateStore stateStore;
 static PersistedState pstate;
 static EventLogStore eventLog;
+static WebUi web;
+static LocationCatalog catalog;
 static AlertsClient client;
 static AlertEngine engine;
 static SnapshotBuilder builder;
@@ -94,6 +73,7 @@ static void applyConfig() {
     backoff.setConfig({appCfg.pollIntervalSec * 1000u, 120000, 60000, 300000, 10});
     health.setConfig({appCfg.apiStaleAfterSec * 1000u});
     builder.setSelected(appCfg.selected, appCfg.selectedCount);
+    builder.setCatalog(&catalog);
 }
 
 static const char* eventName(AlertEvent e) {
@@ -124,9 +104,13 @@ static void handleSerialLine(String line) {
         Serial.printf("[CFG] token %s\n", cfg.save() ? "saved, restarting" : "SAVE FAILED");
         delay(500);
         ESP.restart();
-    } else if (line == "show") { // token itself never printed (SPEC 6)
-        Serial.printf("[CFG] ssid='%s' token: %s\n", cfg.wifiSsid.c_str(),
-                      cfg.apiToken.length() ? "configured" : "MISSING");
+    } else if (line.startsWith("setpass ")) { // admin password for Web UI
+        cfg.setWebPassword(line.substring(8));
+        Serial.printf("[CFG] web password %s\n", cfg.save() ? "saved" : "SAVE FAILED");
+    } else if (line == "show") { // secrets never printed (SPEC 6)
+        Serial.printf("[CFG] ssid='%s' token: %s webpass: %s\n", cfg.wifiSsid.c_str(),
+                      cfg.apiToken.length() ? "configured" : "MISSING",
+                      cfg.hasWebPassword() ? "set" : "NOT SET");
     } else if (line == "restart") {
         ESP.restart();
     } else if (line == "mute") {
@@ -265,6 +249,25 @@ void setup() {
         Serial.printf("[NTP] time ok: %lld\n", static_cast<long long>(now));
     }
 
+    // Web UI is available regardless of token state (needed to configure it)
+    web.begin({&appCfg, &engine, &notify, &health, &relay, &configStore, &cfg,
+               &eventLog,
+               [] { applyConfig(); },
+               [](const String& t) {
+                   cfg.apiToken = t;
+                   cfg.save();
+                   client.begin(t);
+                   ready = true;
+                   nextPollAt = millis(); // poll with the new token immediately
+               },
+               [](bool longPress) { muteNow(longPress); },
+               [] {
+                   notify.unmute();
+                   eventLog.log(LogEvent::Unmute);
+               }});
+    Serial.printf("[WEB] http://%s/ (%s)\n", WiFi.localIP().toString().c_str(),
+                  cfg.hasWebPassword() ? "password set" : "SET PASSWORD: setpass <pass>");
+
     if (!client.hasToken()) {
         Serial.println("[API] DEVICE NOT READY: no API token (SPEC 162)");
         return;
@@ -389,6 +392,7 @@ static void updateLed(bool sirenOn) {
 void loop() {
     const uint32_t now = millis();
     pollSerial();
+    web.tick();
 
     // buttons work even before Wi-Fi/API are ready
     switch (btnMute.tick(now)) {
