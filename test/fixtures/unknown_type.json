@@ -1,0 +1,12 @@
+{"alerts":[
+ {"id":401,"location_title":"Київська область","location_type":"okrug",
+  "started_at":"2026-08-21T10:00:00.000Z","finished_at":null,
+  "updated_at":"2026-08-21T10:00:01.000Z","alert_type":"orbital_strike",
+  "location_uid":"14","location_oblast":"Київська область",
+  "location_oblast_uid":"14","location_raion":null,"notes":null,"calculated":false},
+ {"id":402,"location_title":"???","location_type":"oblast",
+  "started_at":"not-a-date","finished_at":null,
+  "updated_at":null,"alert_type":"air_raid",
+  "location_uid":null,"location_oblast":null,
+  "location_oblast_uid":null,"location_raion":null,"notes":null,"calculated":true}
+]}

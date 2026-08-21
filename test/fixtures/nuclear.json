@@ -1,0 +1,7 @@
+{"alerts":[
+ {"id":302,"location_title":"м. Київ","location_type":"city",
+  "started_at":"2026-08-21T09:30:00.000Z","finished_at":null,
+  "updated_at":"2026-08-21T09:30:01.000Z","alert_type":"nuclear",
+  "location_uid":"31","location_oblast":"м. Київ",
+  "location_oblast_uid":"31","location_raion":null,"notes":null,"calculated":false}
+]}

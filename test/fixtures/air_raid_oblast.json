@@ -1,0 +1,7 @@
+{"alerts":[
+ {"id":101,"location_title":"Київська область","location_type":"oblast",
+  "started_at":"2026-08-21T08:00:00.000Z","finished_at":null,
+  "updated_at":"2026-08-21T08:00:05.000Z","alert_type":"air_raid",
+  "location_uid":"14","location_oblast":"Київська область",
+  "location_oblast_uid":"14","location_raion":null,"notes":null,"calculated":false}
+]}

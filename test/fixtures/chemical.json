@@ -1,0 +1,7 @@
+{"alerts":[
+ {"id":301,"location_title":"Ірпінська територіальна громада","location_type":"hromada",
+  "started_at":"2026-08-21T09:00:00.000Z","finished_at":null,
+  "updated_at":"2026-08-21T09:00:01.000Z","alert_type":"chemical",
+  "location_uid":"123","location_oblast":"Київська область",
+  "location_oblast_uid":"14","location_raion":"Бучанський район","notes":null,"calculated":false}
+]}

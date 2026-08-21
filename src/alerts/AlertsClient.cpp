@@ -1,0 +1,62 @@
+#include "AlertsClient.h"
+#include "AlertsCa.h"
+
+static const char kAlertsUrl[] = "https://api.alerts.in.ua/v1/alerts/active.json";
+
+AlertsClient::Result AlertsClient::poll(airalert::SnapshotBuilder& builder) {
+    Result r;
+
+    BearSSL::WiFiClientSecure client;
+    static BearSSL::X509List ca(ALERTS_CA_PEM);
+    client.setTrustAnchors(&ca);
+    client.setBufferSizes(4096, 512); // SPEC 113; RX must fit TLS records
+    client.setSession(&session_);
+
+    HTTPClient http;
+    http.setTimeout(10000);
+    http.useHTTP10(true); // no chunked encoding -> ArduinoJson can read the stream
+    if (!http.begin(client, kAlertsUrl)) { r.kind = Result::Kind::NetError; return r; }
+
+    http.addHeader("Authorization", "Bearer " + token_);
+    if (lastModified_.length()) http.addHeader("If-Modified-Since", lastModified_);
+    const char* keys[] = {"Last-Modified", "Retry-After"};
+    http.collectHeaders(keys, 2);
+
+    const int code = http.GET();
+    r.httpCode = code;
+
+    switch (code) {
+        case HTTP_CODE_OK: {
+            if (http.header("Last-Modified").length())
+                lastModified_ = http.header("Last-Modified"); // SPEC 8
+            JsonDocument filter;
+            airalert::buildAlertsFilter(filter);
+            JsonDocument doc;
+            const auto err = deserializeJson(doc, http.getStream(),
+                                             DeserializationOption::Filter(filter));
+            if (err != DeserializationError::Ok) {
+                r.kind = Result::Kind::ParseError;
+                break;
+            }
+            if (airalert::extractAlerts(doc, builder, r.stats)
+                != airalert::ParseError::None) {
+                r.kind = Result::Kind::ParseError; // SPEC 167
+                break;
+            }
+            r.kind = Result::Kind::Ok;
+            break;
+        }
+        case HTTP_CODE_NOT_MODIFIED: r.kind = Result::Kind::NotModified; break;
+        case HTTP_CODE_UNAUTHORIZED: r.kind = Result::Kind::AuthError; break;   // SPEC 163
+        case HTTP_CODE_FORBIDDEN: r.kind = Result::Kind::Forbidden; break;      // SPEC 164
+        case HTTP_CODE_TOO_MANY_REQUESTS:                                        // SPEC 165
+            r.kind = Result::Kind::RateLimited;
+            r.retryAfterSec = http.header("Retry-After").toInt();
+            break;
+        default:
+            r.kind = code < 0 ? Result::Kind::NetError : Result::Kind::HttpError;
+            break;
+    }
+    http.end();
+    return r;
+}
