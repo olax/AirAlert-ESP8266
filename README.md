@@ -22,6 +22,10 @@ Home Assistant, MQTT-брокера чи хмарного сервера.
 - provisioning: перший бут → AP + captive portal
 - OTA: upload або HTTPS URL + SHA-256
 
+## Схема підключення
+
+![Схема підключення](docs/img/wiring.svg)
+
 ## Швидкий старт
 
 ```bash
