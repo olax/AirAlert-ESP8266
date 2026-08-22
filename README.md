@@ -4,9 +4,10 @@
 API alerts.in.ua → реле/сирена + LED-індикація + Web UI. Без Raspberry Pi,
 Home Assistant, MQTT-брокера чи хмарного сервера.
 
-**Статус: 0.9 (pre-release).** Firmware-фази 0–9 завершені й перевірені на
-живій платі. Залишилось: hardware commissioning з реальним реле/LED
-(docs/COMMISSIONING.md) і реліз 1.0.
+**Статус: 0.9 (pre-release).** Firmware-фази 0–9 завершені; commissioning
+сценарію A пройдено на живому залізі (реле 5В на D5 + індикатор на D0,
+полярність і safety перевірені). Зовнішнє code review (Codex) інтегровано.
+Залишилось: підключення сирени до клем реле, safety-тест із Web UI, тег 1.0.
 
 ## Можливості
 
@@ -43,9 +44,14 @@ py -3 -m esptool --port COM3 --baud 921600 write-flash 0x0 \
 
 ## Документація
 
-`docs/`: SPEC (повне ТЗ) · RESEARCH · ARCHITECTURE · HARDWARE · API ·
-CONFIGURATION · SECURITY · OTA · TESTING · COMMISSIONING · TROUBLESHOOTING ·
-RELEASE
+- **[Посібник користувача](docs/USER-GUIDE.md)** — налаштування і щоденна робота
+- [Серіал-консоль](docs/SERIAL.md) — всі команди
+- Розробка: [ARCHITECTURE](docs/ARCHITECTURE.md) · [HARDWARE](docs/HARDWARE.md) ·
+  [API](docs/API.md) · [CONFIGURATION](docs/CONFIGURATION.md) ·
+  [TESTING](docs/TESTING.md) (з емулятором API) · [OTA](docs/OTA.md) ·
+  [SECURITY](docs/SECURITY.md) · [COMMISSIONING](docs/COMMISSIONING.md) ·
+  [TROUBLESHOOTING](docs/TROUBLESHOOTING.md) · [RELEASE](docs/RELEASE.md) ·
+  [RESEARCH](docs/RESEARCH.md) · [SPEC](docs/SPEC.md) (повне ТЗ, 216 розділів)
 
 ## Джерело даних
 
