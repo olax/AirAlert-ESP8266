@@ -68,8 +68,12 @@ static void fillActiveView() {
         for (uint8_t t = 0; t < kAlertTypeCount; ++t) {
             const auto& cell = builder.locCell(li, static_cast<AlertType>(t));
             if (cell.coverage == Coverage::None) continue;
-            activeView.threats[li][n++] = {t, static_cast<uint8_t>(cell.coverage),
-                                           cell.startedAt};
+            // named assignment, NOT positional braces: the field order already
+            // bit us once (coverage landed in .type and painted urban fights)
+            auto& th = activeView.threats[li][n++];
+            th.startedAt = cell.startedAt;
+            th.type = t;
+            th.coverage = static_cast<uint8_t>(cell.coverage);
         }
         activeView.threatCount[li] = n;
     }
