@@ -9,7 +9,7 @@
 | Чіп | ESP8266EX, кварц 26 МГц | `esptool flash-id` |
 | Флеш | 4 МБ (mfr 0x5e, dev 0x4016) | `esptool flash-id` |
 | USB-UART | CH340 (VID 1A86, PID 7523), COM3 на Windows-хості | Win32_PnPEntity |
-| MAC | 98:f4:ab:da:f2:91 | `esptool read-mac` |
+| MAC | 98:f4:ab:xx:xx:xx | `esptool read-mac` |
 | Стокова прошивка | Espressif AT v1.3.0.0 / SDK 2.0.0 | AT+GMR |
 | Бекап флешу | `../stock-backup/nodemcu-stock-4M.bin` + SHA256 | `read-flash 0x0 0x400000` |
 
