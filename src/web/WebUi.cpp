@@ -4,6 +4,7 @@
 #include <Updater.h>
 #include <WiFiClientSecureBearSSL.h>
 #include <bearssl/bearssl_hash.h>
+#include <osapi.h>
 #include "alerts/CaBundle.h"
 #include "WebAssets.h"
 
@@ -11,6 +12,37 @@ using namespace airalert;
 
 static const char* coverageName(Coverage c) {
     return c == Coverage::Full ? "full" : c == Coverage::Partial ? "partial" : "none";
+}
+
+static bool constantTimeEqual(const String& a, const String& b) {
+    if (a.length() != b.length()) return false;
+    uint8_t different = 0;
+    for (size_t i = 0; i < a.length(); ++i)
+        different |= static_cast<uint8_t>(a[i] ^ b[i]);
+    return different == 0;
+}
+
+static bool sameLocations(const AppConfig& a, const AppConfig& b) {
+    if (a.selectedCount != b.selectedCount) return false;
+    for (uint8_t i = 0; i < a.selectedCount; ++i) {
+        const Location& left = a.selected[i];
+        const Location& right = b.selected[i];
+        if (left.uid != right.uid || left.type != right.type ||
+            left.oblastUid != right.oblastUid || left.raionUid != right.raionUid)
+            return false;
+    }
+    return true;
+}
+
+static bool isSha256Hex(const String& value) {
+    if (value.length() != 64) return false;
+    for (size_t i = 0; i < value.length(); ++i) {
+        const char c = value[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') ||
+              (c >= 'A' && c <= 'F')))
+            return false;
+    }
+    return true;
 }
 
 void WebUi::begin(const Deps& d) {
@@ -57,9 +89,15 @@ void WebUi::begin(const Deps& d) {
     });
     server_.on("/api/v1/ota/upload", HTTP_POST,
                [this] { // final response after upload completes
-                   if (Update.hasError()) {
+                   if (!otaUploadAuthorized_) return;
+                   if (!otaUploadSucceeded_ || Update.hasError()) {
                        d_.log->log(LogEvent::OtaFailed);
-                       sendError(500, "OTA_FAILED", Update.getErrorString().c_str());
+                       const char* error = Update.hasError()
+                                               ? Update.getErrorString().c_str()
+                                               : "upload incomplete";
+                       Update.end();
+                       d_.finishFailedOta();
+                       sendError(500, "OTA_FAILED", error);
                    } else {
                        d_.log->log(LogEvent::OtaSuccess);
                        server_.send(200, "application/json", "{\"ok\":true}");
@@ -153,9 +191,10 @@ void WebUi::handleLogin() {
     Session* slot = &sessions_[0];
     for (auto& s : sessions_)
         if (static_cast<int32_t>(s.expiresAt - slot->expiresAt) < 0) slot = &s;
-    snprintf(slot->token, sizeof slot->token, "%08x%08x%08x%08x",
-             static_cast<unsigned>(ESP.random()), static_cast<unsigned>(ESP.random()),
-             static_cast<unsigned>(ESP.random()), static_cast<unsigned>(ESP.random()));
+    uint8_t randomToken[16];
+    os_get_random(randomToken, sizeof randomToken);
+    for (uint8_t i = 0; i < sizeof randomToken; ++i)
+        snprintf(slot->token + i * 2, 3, "%02x", randomToken[i]);
     slot->expiresAt = millis() + kSessionTtlMs;
     JsonDocument out;
     out["token"] = slot->token;
@@ -176,6 +215,23 @@ void WebUi::handleStatus() { // SPEC 127; auth required (SPEC 99 default)
     d["api"]["online"] = d_.health->online();
     d["api"]["stale"] = d_.health->stale(millis());
     d["api"]["ever_synced"] = d_.engine->synced();
+    d["api"]["ntp_synced"] = *d_.ntpSynced;
+    d["api"]["selected_locations"] = d_.cfg->selectedCount;
+    if (*d_.lastApiHttpCode) d["api"]["last_http_code"] = *d_.lastApiHttpCode;
+    else d["api"]["last_http_code"] = nullptr;
+    if (d_.lastApiError->length()) d["api"]["last_error"] = *d_.lastApiError;
+    else d["api"]["last_error"] = nullptr;
+    const char* waitingReason = nullptr;
+    if (!d_.engine->synced()) {
+        if (d_.cfg->selectedCount == 0) waitingReason = "locations";
+        else if (!d_.wifi->online()) waitingReason = "wifi";
+        else if (d_.secrets->apiToken.length() == 0) waitingReason = "token";
+        else if (!*d_.ntpSynced) waitingReason = "time";
+        else if (d_.lastApiError->length()) waitingReason = d_.lastApiError->c_str();
+        else waitingReason = "api";
+    }
+    if (waitingReason) d["api"]["waiting_reason"] = waitingReason;
+    else d["api"]["waiting_reason"] = nullptr;
     if (since == UINT32_MAX) d["api"]["last_contact_sec"] = nullptr;
     else d["api"]["last_contact_sec"] = since / 1000;
     d["api"]["token_present"] = d_.secrets->apiToken.length() > 0; // value never sent (SPEC 6)
@@ -213,15 +269,19 @@ void WebUi::handleConfigPut() {
         return;
     }
     AppConfig next = *d_.cfg; // start from current, overlay body (SPEC 90 style)
-    configFromJson(d.as<JsonVariantConst>(), next);
-    const ConfigError err = validateConfig(next); // backend validation (SPEC 155)
+    const ConfigError err = configFromJson(d.as<JsonVariantConst>(), next);
     if (err != ConfigError::None) {
         sendError(422, "INVALID_CONFIG", "value out of allowed range");
         return;
     }
+    const bool locationsChanged = !sameLocations(*d_.cfg, next);
+    if (!d_.configStore->save(next)) {
+        sendError(500, "FS_ERROR", "cannot persist config");
+        return;
+    }
     *d_.cfg = next;
-    d_.configStore->save(*d_.cfg);
     d_.applyConfig();
+    if (locationsChanged) d_.refreshAlerts();
     d_.log->log(LogEvent::ConfigChanged, "source=web");
     server_.send(200, "application/json", "{\"ok\":true}");
 }
@@ -237,14 +297,18 @@ void WebUi::handleLocationsPut() {
     AppConfig next = *d_.cfg;
     JsonDocument wrap; // reuse the config parser for just the locations array
     wrap["locations"] = d["locations"];
-    configFromJson(wrap.as<JsonVariantConst>(), next);
-    if (validateConfig(next) != ConfigError::None || next.selectedCount == 0) {
+    const ConfigError err = configFromJson(wrap.as<JsonVariantConst>(), next);
+    if (err != ConfigError::None || next.selectedCount == 0) {
         sendError(422, "INVALID_CONFIG", "bad location list");
         return;
     }
+    if (!d_.configStore->save(next)) {
+        sendError(500, "FS_ERROR", "cannot persist locations");
+        return;
+    }
     *d_.cfg = next;
-    d_.configStore->save(*d_.cfg);
     d_.applyConfig();
+    d_.refreshAlerts();
     d_.log->log(LogEvent::ConfigChanged, "locations");
     server_.send(200, "application/json", "{\"ok\":true}");
 }
@@ -254,10 +318,17 @@ void WebUi::handleTokenPut() { // write-only (SPEC 91)
     JsonDocument d;
     const String tok = (deserializeJson(d, server_.arg("plain")) == DeserializationError::Ok)
                            ? (d["token"] | "") : String();
-    if (tok.length() < 10) {
-        sendError(422, "BAD_TOKEN", "token too short");
+    if (tok.length() < 10 || tok.length() > 256) {
+        sendError(422, "BAD_TOKEN", "token length must be 10..256");
         return;
     }
+    SecretsStore next = *d_.secrets;
+    next.apiToken = tok;
+    if (!next.save()) {
+        sendError(500, "FS_ERROR", "cannot persist API token");
+        return;
+    }
+    *d_.secrets = next;
     d_.setApiToken(tok);
     d_.log->log(LogEvent::ConfigChanged, "api_token");
     server_.send(200, "application/json", "{\"ok\":true}");
@@ -321,33 +392,71 @@ void WebUi::handleScan() {
 }
 
 void WebUi::handleSetup() { // SPEC 80
-    // Unauthenticated ONLY while the device has no admin password (first run).
-    // A provisioned device demands auth even in recovery mode.
-    if (d_.secrets->hasWebPassword() && !authed()) return;
     JsonDocument d;
     if (deserializeJson(d, server_.arg("plain")) != DeserializationError::Ok) {
         sendError(400, "BAD_JSON", "invalid JSON body");
         return;
     }
+    const String setupKey = d["setup_key"] | "";
+    const bool portalAuthorized =
+        d_.wifi->state() == WifiService::State::Provisioning &&
+        constantTimeEqual(setupKey, d_.wifi->apPass());
+    if (!portalAuthorized) {
+        if (!d_.secrets->hasWebPassword()) {
+            sendError(401, "BAD_SETUP_KEY", "setup key required");
+            return;
+        }
+        if (!authed()) return;
+    }
+
     const String ssid = d["wifi_ssid"] | "";
+    const String wifiPass = d["wifi_pass"] | "";
+    const String token = d["api_token"] | "";
     const String apass = d["admin_pass"] | "";
-    if (!ssid.length()) { sendError(422, "BAD_SSID", "wifi_ssid required"); return; }
+    const String name = d["device_name"] | "";
+    if (!ssid.length() || ssid.length() > 32) {
+        sendError(422, "BAD_SSID", "wifi_ssid length must be 1..32");
+        return;
+    }
+    if (wifiPass.length() > 64) {
+        sendError(422, "BAD_WIFI_PASSWORD", "wifi password too long");
+        return;
+    }
+    if (token.length() && (token.length() < 10 || token.length() > 256)) {
+        sendError(422, "BAD_TOKEN", "token length must be 10..256");
+        return;
+    }
     if (!d_.secrets->hasWebPassword() && apass.length() < 6) {
         sendError(422, "BAD_PASSWORD", "admin password >= 6 chars");
         return;
     }
-    d_.secrets->wifiSsid = ssid;
-    d_.secrets->wifiPass = d["wifi_pass"] | "";
-    const String tok = d["api_token"] | "";
-    if (tok.length()) d_.secrets->apiToken = tok;
-    if (apass.length() >= 6) d_.secrets->setWebPassword(apass);
-    const String name = d["device_name"] | "";
-    if (name.length()) {
-        strncpy(d_.cfg->deviceName, name.c_str(), sizeof d_.cfg->deviceName - 1);
-        d_.cfg->deviceName[sizeof d_.cfg->deviceName - 1] = 0;
-        d_.configStore->save(*d_.cfg);
+    if (apass.length() > 128 || name.length() >= sizeof d_.cfg->deviceName) {
+        sendError(422, "BAD_VALUE", "admin password or device name too long");
+        return;
     }
-    if (!d_.secrets->save()) { sendError(500, "FS_ERROR", "cannot persist"); return; }
+
+    const AppConfig oldConfig = *d_.cfg;
+    AppConfig nextConfig = oldConfig;
+    if (name.length()) memcpy(nextConfig.deviceName, name.c_str(), name.length() + 1);
+    if (validateConfig(nextConfig) != ConfigError::None ||
+        !d_.configStore->save(nextConfig)) {
+        sendError(500, "FS_ERROR", "cannot persist device config");
+        return;
+    }
+
+    SecretsStore nextSecrets = *d_.secrets;
+    nextSecrets.wifiSsid = ssid;
+    nextSecrets.wifiPass = wifiPass;
+    if (token.length()) nextSecrets.apiToken = token;
+    if (apass.length() >= 6) nextSecrets.setWebPassword(apass);
+    if (!nextSecrets.save()) {
+        d_.configStore->save(oldConfig);
+        sendError(500, "FS_ERROR", "cannot persist secrets");
+        return;
+    }
+
+    *d_.cfg = nextConfig;
+    *d_.secrets = nextSecrets;
     d_.log->log(LogEvent::ConfigChanged, "setup_portal");
     server_.send(200, "application/json", "{\"ok\":true}");
     rebootAt_ = millis() + 800; // reboot into STA with the new credentials
@@ -356,19 +465,30 @@ void WebUi::handleSetup() { // SPEC 80
 void WebUi::handleOtaUpload() { // SPEC 102, Invariant 8
     HTTPUpload& up = server_.upload();
     if (up.status == UPLOAD_FILE_START) {
-        if (!authed()) return; // checked once at stream start
+        otaUploadAuthorized_ = authed(); // checked once at stream start
+        otaUploadStarted_ = false;
+        otaUploadSucceeded_ = false;
+        if (!otaUploadAuthorized_) return;
         d_.prepareOta();       // relay OFF, queue cleared, patterns stopped
         d_.log->log(LogEvent::OtaStarted, "source=upload");
         const uint32_t maxSketch = (ESP.getFreeSketchSpace() - 0x1000) & 0xFFFFF000;
-        if (!Update.begin(maxSketch)) Update.printError(Serial);
+        otaUploadStarted_ = Update.begin(maxSketch);
+        if (!otaUploadStarted_) Update.printError(Serial);
     } else if (up.status == UPLOAD_FILE_WRITE) {
-        if (Update.write(up.buf, up.currentSize) != up.currentSize)
+        if (otaUploadStarted_ && Update.write(up.buf, up.currentSize) != up.currentSize) {
+            otaUploadStarted_ = false;
             Update.printError(Serial);
+            Update.end();
+        }
     } else if (up.status == UPLOAD_FILE_END) {
-        if (!Update.end(true)) Update.printError(Serial);
+        otaUploadSucceeded_ = otaUploadStarted_ && Update.end(true);
+        if (!otaUploadSucceeded_) Update.printError(Serial);
     } else if (up.status == UPLOAD_FILE_ABORTED) {
         Update.end();
+        otaUploadStarted_ = false;
+        otaUploadSucceeded_ = false;
         d_.log->log(LogEvent::OtaFailed, "aborted");
+        d_.finishFailedOta();
     }
     yield();
 }
@@ -384,10 +504,16 @@ void WebUi::handleOtaUrl() { // SPEC 103: HTTPS + size + SHA-256 mandatory
     String sha = d["sha256"] | "";
     sha.toLowerCase();
     if (!url.startsWith("https://")) { sendError(422, "BAD_URL", "HTTPS required"); return; }
-    if (sha.length() != 64) { sendError(422, "BAD_SHA", "sha256 hex required"); return; }
+    if (!isSha256Hex(sha)) { sendError(422, "BAD_SHA", "sha256 hex required"); return; }
 
     d_.prepareOta(); // Invariant 8
     d_.log->log(LogEvent::OtaStarted, "source=url");
+    auto fail = [this](int status, const char* code, const String& message,
+                       const char* logDetail) {
+        d_.log->log(LogEvent::OtaFailed, logDetail);
+        d_.finishFailedOta();
+        sendError(status, code, message.c_str());
+    };
 
     BearSSL::WiFiClientSecure client;
     static BearSSL::X509List cas(CA_BUNDLE_PEM);
@@ -396,25 +522,26 @@ void WebUi::handleOtaUrl() { // SPEC 103: HTTPS + size + SHA-256 mandatory
     HTTPClient http;
     http.setTimeout(20000);
     http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS); // GitHub 302s
-    if (!http.begin(client, url)) { sendError(500, "NET", "begin failed"); return; }
+    if (!http.begin(client, url)) {
+        fail(500, "NET", "begin failed", "begin");
+        return;
+    }
     const int code = http.GET();
     if (code != HTTP_CODE_OK) {
         http.end();
-        d_.log->log(LogEvent::OtaFailed, "http");
-        sendError(502, "HTTP_ERROR", String(code).c_str());
+        fail(502, "HTTP_ERROR", String(code), "http");
         return;
     }
     const int len = http.getSize();
     const uint32_t maxSketch = (ESP.getFreeSketchSpace() - 0x1000) & 0xFFFFF000;
     if (len <= 0 || static_cast<uint32_t>(len) > maxSketch) {
         http.end();
-        d_.log->log(LogEvent::OtaFailed, "size");
-        sendError(422, "BAD_SIZE", "image does not fit");
+        fail(422, "BAD_SIZE", "image does not fit", "size");
         return;
     }
     if (!Update.begin(len)) {
         http.end();
-        sendError(500, "OTA_FAILED", Update.getErrorString().c_str());
+        fail(500, "OTA_FAILED", Update.getErrorString(), "begin_update");
         return;
     }
     br_sha256_context sha_ctx;
@@ -437,13 +564,13 @@ void WebUi::handleOtaUrl() { // SPEC 103: HTTPS + size + SHA-256 mandatory
     for (int i = 0; i < 32; ++i) snprintf(hex + i * 2, 3, "%02x", digest[i]);
     if (remaining != 0 || sha != hex) { // checksum gate (SPEC 130)
         Update.end();
-        d_.log->log(LogEvent::OtaFailed, remaining ? "truncated" : "sha256_mismatch");
-        sendError(422, "VERIFY_FAILED", remaining ? "truncated download" : "sha256 mismatch");
+        fail(422, "VERIFY_FAILED",
+             remaining ? "truncated download" : "sha256 mismatch",
+             remaining ? "truncated" : "sha256_mismatch");
         return;
     }
     if (!Update.end(true)) {
-        d_.log->log(LogEvent::OtaFailed);
-        sendError(500, "OTA_FAILED", Update.getErrorString().c_str());
+        fail(500, "OTA_FAILED", Update.getErrorString(), "finalize");
         return;
     }
     d_.log->log(LogEvent::OtaSuccess, "source=url");

@@ -12,6 +12,7 @@ public:
         : maxOnMs_(maxContinuousOnMs) {}
 
     void setLimit(uint32_t ms) { maxOnMs_ = ms; }
+    void trip() { on_ = false; tripped_ = true; }
 
     // requested = what the pattern layer wants; returns what the relay gets.
     bool tick(bool requested, uint32_t nowMs) {

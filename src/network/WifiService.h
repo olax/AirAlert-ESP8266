@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include <DNSServer.h>
 #include <ESP8266WiFi.h>
+#include <osapi.h>
 #include "config/SecretsStore.h"
 
 class WifiService {
@@ -17,11 +18,14 @@ public:
         secrets_ = secrets;
         apSsid_ = "AirAlert-" + String(ESP.getChipId() & 0xFFFF, HEX);
         apSsid_.toUpperCase();
-        // per-device AP password (SPEC 79: no universal default). Printed to
-        // serial on provisioning entry; stable across reboots (chip id based).
-        char pass[16];
-        snprintf(pass, sizeof pass, "aa-%08x", ESP.getChipId() * 2654435761u);
-        apPass_ = pass;
+        // Persisted random secret: recovery remains possible without making
+        // the AP password derivable from the public chip id.
+        if (secrets_->provisioningPass.length() < 12) {
+            secrets_->provisioningPass = makeProvisioningPass();
+            if (!secrets_->save())
+                Serial.println("[WIFI] failed to persist provisioning password");
+        }
+        apPass_ = secrets_->provisioningPass;
         if (secrets_->wifiSsid.length()) startSta();
         else startProvisioning("no Wi-Fi credentials");
     }
@@ -68,6 +72,18 @@ public:
     const String& apPass() const { return apPass_; }
 
 private:
+    static String makeProvisioningPass() {
+        static constexpr char alphabet[] =
+            "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+        uint8_t randomBytes[16];
+        os_get_random(randomBytes, sizeof randomBytes);
+        String pass;
+        pass.reserve(sizeof randomBytes);
+        for (uint8_t value : randomBytes)
+            pass += alphabet[value % (sizeof alphabet - 1)];
+        return pass;
+    }
+
     void startSta() {
         dns_.stop();
         WiFi.mode(WIFI_STA);

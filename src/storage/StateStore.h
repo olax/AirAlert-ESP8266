@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <LittleFS.h>
 #include <ArduinoJson.h>
+#include "config/AtomicJsonFile.h"
 
 struct PersistedState {
     uint32_t alertFingerprint = 0;   // StartupPolicy::fingerprint of active set
@@ -12,16 +13,15 @@ struct PersistedState {
 class StateStore {
 public:
     static constexpr const char* kPath = "/state.json";
+    static constexpr const char* kTmpPath = "/state.new";
+    static constexpr const char* kBackupPath = "/state.bak";
 
     bool load(PersistedState& s) {
-        File f = LittleFS.open(kPath, "r");
-        if (!f) return false;
         JsonDocument d;
-        const bool ok = deserializeJson(d, f) == DeserializationError::Ok;
-        f.close();
-        if (!ok) return false;
+        if (!atomic_json::readWithBackup(kPath, kBackupPath, d)) return false;
         s.alertFingerprint = d["fp"] | 0u;
         s.startupNotifAtUtc = d["notif_at"] | 0ll;
+        last_ = s;
         return true;
     }
 
@@ -29,13 +29,10 @@ public:
         if (s.alertFingerprint == last_.alertFingerprint &&
             s.startupNotifAtUtc == last_.startupNotifAtUtc)
             return true; // no change, no flash wear (SPEC 96)
-        File f = LittleFS.open(kPath, "w"); // tiny file: plain write is fine
-        if (!f) return false;
         JsonDocument d;
         d["fp"] = s.alertFingerprint;
         d["notif_at"] = s.startupNotifAtUtc;
-        serializeJson(d, f);
-        f.close();
+        if (!atomic_json::write(kPath, kTmpPath, kBackupPath, d)) return false;
         last_ = s;
         return true;
     }

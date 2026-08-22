@@ -27,9 +27,14 @@ public:
         WifiService* wifi;
         std::function<void()> applyConfig;      // config -> subsystems
         std::function<void(const String&)> setApiToken;
+        std::function<void()> refreshAlerts;    // location selection changed
         std::function<void(bool)> mute;         // arg: long/snooze
         std::function<void()> unmute;
         std::function<void()> prepareOta;       // Invariant 8: relay off, queue clear
+        std::function<void()> finishFailedOta;  // resume normal loop after failure
+        const bool* ntpSynced;
+        const int* lastApiHttpCode;
+        const String* lastApiError;
     };
 
     void begin(const Deps& d);
@@ -64,4 +69,7 @@ private:
     uint8_t loginFails_ = 0;
     uint32_t lockUntil_ = 0;
     uint32_t rebootAt_ = 0;
+    bool otaUploadAuthorized_ = false;
+    bool otaUploadStarted_ = false;
+    bool otaUploadSucceeded_ = false;
 };

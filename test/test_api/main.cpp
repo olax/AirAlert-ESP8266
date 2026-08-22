@@ -3,6 +3,7 @@
 #include "airalert/Iso8601.h"
 #include "airalert/BackoffPolicy.h"
 #include "airalert/ApiHealth.h"
+#include "airalert/ApiSnapshotCache.h"
 
 using namespace airalert;
 
@@ -87,6 +88,20 @@ void test_health_wraparound() {
     TEST_ASSERT_TRUE(h.stale(0xFFFFFF00u + 60000u));
 }
 
+void test_snapshot_cache_rejects_304_until_valid_response_committed() {
+    ApiSnapshotCache cache;
+    TEST_ASSERT_FALSE(cache.canAcceptNotModified());
+    cache.commitValidSnapshot();
+    TEST_ASSERT_TRUE(cache.canAcceptNotModified());
+}
+
+void test_snapshot_cache_invalidation_requires_fresh_response() {
+    ApiSnapshotCache cache;
+    cache.commitValidSnapshot();
+    cache.invalidate();
+    TEST_ASSERT_FALSE(cache.canAcceptNotModified());
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_iso8601_known_values);
@@ -99,5 +114,7 @@ int main() {
     RUN_TEST(test_health_stale_threshold);
     RUN_TEST(test_health_failure_keeps_last_contact);
     RUN_TEST(test_health_wraparound);
+    RUN_TEST(test_snapshot_cache_rejects_304_until_valid_response_committed);
+    RUN_TEST(test_snapshot_cache_invalidation_requires_fresh_response);
     return UNITY_END();
 }

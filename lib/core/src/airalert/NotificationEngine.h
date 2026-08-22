@@ -13,6 +13,13 @@ namespace airalert {
 // the firmware feeds it through RelayGuard into RelayController.
 class NotificationEngine {
 public:
+    struct Config {
+        bool notifyEscalation = true;
+        bool notifyAdditionalLocation = false;
+        bool remindersWhenStale = false;
+        uint16_t manualTestMs = 600;
+    };
+
     NotificationEngine() {
         for (uint8_t i = 0; i < kAlertTypeCount; ++i)
             profiles_[i] = defaultProfile(static_cast<AlertType>(i));
@@ -22,6 +29,8 @@ public:
         profiles_[static_cast<uint8_t>(t)] = p;
     }
     void setMuteConfig(const MuteState::Config& c) { mute_.setConfig(c); }
+    void setConfig(const Config& c) { cfg_ = c; }
+    void setApiStale(bool stale) { apiStale_ = stale; }
 
     // How a Started event is voiced (SPEC 26-28):
     //   Normal - full START pattern; Short - one startup pulse (boot into an
@@ -50,6 +59,12 @@ public:
         queue_.clear();
         playing_ = false;
     }
+    void resetAlertState() {
+        stopAll();
+        activeMask_ = 0;
+        for (auto& at : lastReminderAt_) at = 0;
+        mute_.onAllClear();
+    }
 
 private:
     void doMute(MuteState::Scope scope, uint32_t nowMs) {
@@ -63,24 +78,26 @@ private:
     const AlertProfile& prof(AlertType t) const {
         return profiles_[static_cast<uint8_t>(t)];
     }
-    static Pattern patternFor(const AlertProfile& p, Signal s) {
+    Pattern patternFor(const AlertProfile& p, Signal s) const {
         switch (s) {
             case Signal::Start:
             case Signal::Escalation: return p.start; // SPEC 35
             case Signal::End: return p.end;
             case Signal::Reminder: return p.reminder;
             case Signal::StartupActive: return startupPattern();
-            case Signal::ManualTest: return manualTestPattern();
+            case Signal::ManualTest: return Pattern{true, cfg_.manualTestMs, 0, 1};
         }
         return Pattern{};
     }
 
     AlertProfile profiles_[kAlertTypeCount];
+    Config cfg_;
     NotificationQueue queue_;
     PatternScheduler sched_;
     MuteState mute_;
     Notification current_{};
     bool playing_ = false;
+    bool apiStale_ = false;
 
     uint8_t activeMask_ = 0; // bit per active AlertType
     uint32_t lastReminderAt_[kAlertTypeCount] = {};
@@ -107,16 +124,20 @@ inline void NotificationEngine::onEngineEvent(const EngineEvent& ev, StartupMode
                 }
             }
             break;
-        case AlertEvent::Escalated: // SPEC 35: notify_escalation default true
-            if (p.enabled) queue_.push({Signal::Escalation, ev.type, p.priority});
+        case AlertEvent::Escalated: // SPEC 35
+            if (p.enabled && cfg_.notifyEscalation)
+                queue_.push({Signal::Escalation, ev.type, p.priority});
             break;
         case AlertEvent::Ended:
             activeMask_ &= static_cast<uint8_t>(~bit);
             if (p.enabled) queue_.push({Signal::End, ev.type, p.priority});
             if (activeMask_ == 0) mute_.onAllClear(); // SPEC 52
             break;
+        case AlertEvent::LocationAdded: // SPEC 37
+            if (p.enabled && cfg_.notifyAdditionalLocation)
+                queue_.push({Signal::Escalation, ev.type, p.priority});
+            break;
         case AlertEvent::CoverageReduced: // SPEC 36: no signal
-        case AlertEvent::LocationAdded:   // SPEC 37: default off
         default:
             break;
     }
@@ -127,6 +148,7 @@ inline bool NotificationEngine::tick(uint32_t nowMs) {
     for (uint8_t i = 0; i < kAlertTypeCount; ++i) {
         const AlertProfile& p = profiles_[i];
         if ((activeMask_ & (1u << i)) && p.enabled && p.reminder.enabled &&
+            (!apiStale_ || cfg_.remindersWhenStale) &&
             intervalPassed(nowMs, lastReminderAt_[i], p.reminderIntervalMs)) {
             lastReminderAt_[i] = nowMs;
             queue_.push({Signal::Reminder, static_cast<AlertType>(i), p.priority});

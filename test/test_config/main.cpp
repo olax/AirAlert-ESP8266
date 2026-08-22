@@ -10,7 +10,7 @@ using namespace airalert;
 void test_defaults_valid() {
     AppConfig c;
     TEST_ASSERT_EQUAL(ConfigError::None, validateConfig(c));
-    TEST_ASSERT_EQUAL(2, c.selectedCount);
+    TEST_ASSERT_EQUAL(0, c.selectedCount);
     TEST_ASSERT_EQUAL(15, c.pollIntervalSec);
     TEST_ASSERT_EQUAL(90, c.profiles[static_cast<int>(AlertType::Nuclear)].priority);
 }
@@ -32,7 +32,7 @@ void test_roundtrip_preserves_everything() {
     JsonDocument d;
     configToJson(c, d);
     AppConfig r;
-    configFromJson(d.as<JsonVariantConst>(), r);
+    TEST_ASSERT_EQUAL(ConfigError::None, configFromJson(d.as<JsonVariantConst>(), r));
 
     TEST_ASSERT_EQUAL_STRING("Siren-Irpin", r.deviceName);
     TEST_ASSERT_EQUAL(20, r.pollIntervalSec);
@@ -56,11 +56,69 @@ void test_partial_old_config_keeps_defaults() { // SPEC 90: N+1 reads N
     JsonDocument d;
     TEST_ASSERT_TRUE(deserializeJson(d, old) == DeserializationError::Ok);
     AppConfig c;
-    configFromJson(d.as<JsonVariantConst>(), c);
+    TEST_ASSERT_EQUAL(ConfigError::None, configFromJson(d.as<JsonVariantConst>(), c));
     TEST_ASSERT_EQUAL(30, c.pollIntervalSec);         // taken from file
     TEST_ASSERT_EQUAL(60, c.apiStaleAfterSec);        // default kept
-    TEST_ASSERT_EQUAL(2, c.selectedCount);            // default locations kept
+    TEST_ASSERT_EQUAL(0, c.selectedCount);            // no implicit Kyiv subscription
     TEST_ASSERT_TRUE(c.profiles[0].enabled);
+}
+
+void test_json_rejects_too_many_locations_without_truncating() {
+    JsonDocument d;
+    JsonArray locs = d["locations"].to<JsonArray>();
+    for (uint8_t i = 0; i <= SnapshotBuilder::kMaxSelected; ++i) {
+        JsonObject o = locs.add<JsonObject>();
+        o["uid"] = 100 + i;
+        o["type"] = "oblast";
+    }
+    AppConfig c;
+    TEST_ASSERT_EQUAL(ConfigError::TooManyLocations,
+                      configFromJson(d.as<JsonVariantConst>(), c));
+    TEST_ASSERT_EQUAL(0, c.selectedCount);
+}
+
+void test_json_rejects_invalid_and_duplicate_locations() {
+    JsonDocument d;
+    JsonArray locs = d["locations"].to<JsonArray>();
+    JsonObject a = locs.add<JsonObject>();
+    a["uid"] = 14;
+    a["type"] = "oblast";
+    JsonObject b = locs.add<JsonObject>();
+    b["uid"] = 14;
+    b["type"] = "oblast";
+    AppConfig c;
+    TEST_ASSERT_EQUAL(ConfigError::BadLocation,
+                      configFromJson(d.as<JsonVariantConst>(), c));
+
+    d.clear();
+    JsonObject bad = d["locations"].to<JsonArray>().add<JsonObject>();
+    bad["uid"] = 123;
+    bad["type"] = "not-a-location-type";
+    TEST_ASSERT_EQUAL(ConfigError::BadLocation,
+                      configFromJson(d.as<JsonVariantConst>(), c));
+}
+
+void test_json_rejects_overflow_and_overlong_name() {
+    JsonDocument d;
+    d["alerts"]["poll_sec"] = 65551;
+    AppConfig c;
+    TEST_ASSERT_EQUAL(ConfigError::BadPollInterval,
+                      configFromJson(d.as<JsonVariantConst>(), c));
+
+    d.clear();
+    d["device"]["name"] = "this-device-name-is-far-too-long-for-the-buffer";
+    TEST_ASSERT_EQUAL(ConfigError::BadDeviceName,
+                      configFromJson(d.as<JsonVariantConst>(), c));
+}
+
+void test_validation_rejects_stale_range_and_location_shape() {
+    AppConfig c;
+    c.apiStaleAfterSec = 10;
+    TEST_ASSERT_EQUAL(ConfigError::BadStaleInterval, validateConfig(c));
+    c = AppConfig{};
+    c.selectedCount = 1;
+    c.selected[0] = {14, LocationType::Unknown, 0, 0};
+    TEST_ASSERT_EQUAL(ConfigError::BadLocation, validateConfig(c));
 }
 
 void test_validation_rejects_bad_ranges() { // SPEC 7, 42, 155
@@ -123,6 +181,10 @@ int main() {
     RUN_TEST(test_roundtrip_preserves_everything);
     RUN_TEST(test_partial_old_config_keeps_defaults);
     RUN_TEST(test_validation_rejects_bad_ranges);
+    RUN_TEST(test_json_rejects_too_many_locations_without_truncating);
+    RUN_TEST(test_json_rejects_invalid_and_duplicate_locations);
+    RUN_TEST(test_json_rejects_overflow_and_overlong_name);
+    RUN_TEST(test_validation_rejects_stale_range_and_location_shape);
     RUN_TEST(test_fingerprint_stability);
     RUN_TEST(test_startup_policy_cooldown);
     RUN_TEST(test_log_record_format);

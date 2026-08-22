@@ -1,0 +1,13 @@
+# Демо відмов: тривога, потім API падає різними способами
+sleep 20
+start air_raid 14
+sleep 45
+mode 500
+sleep 60
+mode invalid
+sleep 60
+mode 429
+sleep 90
+mode ok
+sleep 45
+stop air_raid 14

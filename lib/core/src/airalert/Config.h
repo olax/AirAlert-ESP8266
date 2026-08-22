@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <ArduinoJson.h>
 #include "AlertProfiles.h"
 #include "Location.h"
@@ -55,27 +56,40 @@ struct AppConfig {
     AppConfig() {
         for (uint8_t i = 0; i < kAlertTypeCount; ++i)
             profiles[i] = defaultProfile(static_cast<AlertType>(i));
-        // dev default until the locations UI exists: м. Київ + Київська обл.
-        selected[0] = {31, LocationType::City, 0, 0};
-        selected[1] = {14, LocationType::Oblast, 0, 0};
-        selectedCount = 2;
     }
 };
 
 enum class ConfigError : uint8_t {
-    None, BadPollInterval, BadConfirmations, BadRelayLimit, BadTestMs,
-    BadSnooze, TooManyLocations, BadPattern
+    None, BadDeviceName, BadPollInterval, BadStaleInterval, BadConfirmations,
+    BadRelayLimit, BadTestMs, BadSnooze, TooManyLocations, BadLocation,
+    BadPattern
 };
 
 // Hard limits (SPEC 42, 155): backend validation, never UI-only.
 inline ConfigError validateConfig(const AppConfig& c) {
+    const size_t nameLen = strnlen(c.deviceName, sizeof c.deviceName);
+    if (nameLen == 0 || nameLen >= sizeof c.deviceName) return ConfigError::BadDeviceName;
     if (c.pollIntervalSec < 10 || c.pollIntervalSec > 600) return ConfigError::BadPollInterval;
+    if (c.apiStaleAfterSec < 30 || c.apiStaleAfterSec > 600)
+        return ConfigError::BadStaleInterval;
     if (c.startConfirmations < 1 || c.startConfirmations > 5 ||
         c.endConfirmations < 1 || c.endConfirmations > 10) return ConfigError::BadConfirmations;
     if (c.relayMaxOnMs < 1000 || c.relayMaxOnMs > 60000) return ConfigError::BadRelayLimit;
     if (c.relayTestMs < 100 || c.relayTestMs > 1000) return ConfigError::BadTestMs;
     if (c.snoozeMinutes < 1 || c.snoozeMinutes > 240) return ConfigError::BadSnooze;
     if (c.selectedCount > SnapshotBuilder::kMaxSelected) return ConfigError::TooManyLocations;
+    for (uint8_t i = 0; i < c.selectedCount; ++i) {
+        const Location& loc = c.selected[i];
+        if (loc.uid == 0 || loc.type == LocationType::Unknown)
+            return ConfigError::BadLocation;
+        if (loc.type == LocationType::Raion && loc.oblastUid == 0)
+            return ConfigError::BadLocation;
+        if (loc.type == LocationType::Hromada &&
+            (loc.oblastUid == 0 || loc.raionUid == 0))
+            return ConfigError::BadLocation;
+        for (uint8_t j = 0; j < i; ++j)
+            if (c.selected[j].uid == loc.uid) return ConfigError::BadLocation;
+    }
     for (const auto& p : c.profiles) {
         for (const Pattern* pt : {&p.start, &p.end, &p.reminder}) {
             if (pt->onMs > 60000 || pt->offMs > 60000 || pt->repeat > 20)
@@ -94,11 +108,30 @@ inline void patternToJson(JsonObject o, const Pattern& p) {
     o["off_ms"] = p.offMs;
     o["repeat"] = p.repeat;
 }
-inline void patternFromJson(JsonVariantConst o, Pattern& p) {
-    p.enabled = o["enabled"] | p.enabled;
-    p.onMs = o["on_ms"] | p.onMs;
-    p.offMs = o["off_ms"] | p.offMs;
-    p.repeat = o["repeat"] | p.repeat;
+template <typename T>
+inline bool overlayUnsigned(JsonVariantConst v, T& out) {
+    if (v.isNull()) return true;
+    if (!v.is<uint32_t>()) return false;
+    const uint32_t value = v.as<uint32_t>();
+    if (value > static_cast<uint32_t>(std::numeric_limits<T>::max())) return false;
+    out = static_cast<T>(value);
+    return true;
+}
+
+inline bool overlayBool(JsonVariantConst v, bool& out) {
+    if (v.isNull()) return true;
+    if (!v.is<bool>()) return false;
+    out = v.as<bool>();
+    return true;
+}
+
+inline bool patternFromJson(JsonVariantConst o, Pattern& p) {
+    if (o.isNull()) return true;
+    if (!o.is<JsonObjectConst>()) return false;
+    return overlayBool(o["enabled"], p.enabled) &&
+           overlayUnsigned(o["on_ms"], p.onMs) &&
+           overlayUnsigned(o["off_ms"], p.offMs) &&
+           overlayUnsigned(o["repeat"], p.repeat);
 }
 
 inline const char* locationTypeToString(LocationType t) {
@@ -156,57 +189,93 @@ inline void configToJson(const AppConfig& c, JsonDocument& d) {
 }
 
 // Missing fields keep defaults, so older configs load cleanly (SPEC 90).
-inline void configFromJson(JsonVariantConst d, AppConfig& c) {
-    c.schemaVersion = d["schema"] | c.schemaVersion;
+// Invalid values fail instead of being narrowed or silently truncated.
+inline ConfigError configFromJson(JsonVariantConst d, AppConfig& c) {
+    if (!d.is<JsonObjectConst>()) return ConfigError::BadPattern;
+    if (!overlayUnsigned(d["schema"], c.schemaVersion)) return ConfigError::BadPattern;
     const char* name = d["device"]["name"] | static_cast<const char*>(nullptr);
-    if (name) { strncpy(c.deviceName, name, sizeof c.deviceName - 1); c.deviceName[sizeof c.deviceName - 1] = 0; }
+    if (name) {
+        const size_t len = strlen(name);
+        if (len == 0 || len >= sizeof c.deviceName) return ConfigError::BadDeviceName;
+        memcpy(c.deviceName, name, len + 1);
+    } else if (!d["device"]["name"].isNull()) {
+        return ConfigError::BadDeviceName;
+    }
     JsonVariantConst a = d["alerts"];
-    c.pollIntervalSec = a["poll_sec"] | c.pollIntervalSec;
-    c.apiStaleAfterSec = a["stale_sec"] | c.apiStaleAfterSec;
-    c.startConfirmations = a["start_conf"] | c.startConfirmations;
-    c.endConfirmations = a["end_conf"] | c.endConfirmations;
-    c.partialActive = a["partial_active"] | c.partialActive;
-    c.partialSiren = a["partial_siren"] | c.partialSiren;
-    c.partialLed = a["partial_led"] | c.partialLed;
-    c.notifyEscalation = a["notify_escalation"] | c.notifyEscalation;
-    c.notifyAdditionalLocation = a["notify_additional_location"] | c.notifyAdditionalLocation;
-    c.remindersWhenStale = a["reminders_when_stale"] | c.remindersWhenStale;
+    if (!overlayUnsigned(a["poll_sec"], c.pollIntervalSec)) return ConfigError::BadPollInterval;
+    if (!overlayUnsigned(a["stale_sec"], c.apiStaleAfterSec)) return ConfigError::BadStaleInterval;
+    if (!overlayUnsigned(a["start_conf"], c.startConfirmations) ||
+        !overlayUnsigned(a["end_conf"], c.endConfirmations))
+        return ConfigError::BadConfirmations;
+    if (!overlayBool(a["partial_active"], c.partialActive) ||
+        !overlayBool(a["partial_siren"], c.partialSiren) ||
+        !overlayBool(a["partial_led"], c.partialLed) ||
+        !overlayBool(a["notify_escalation"], c.notifyEscalation) ||
+        !overlayBool(a["notify_additional_location"], c.notifyAdditionalLocation) ||
+        !overlayBool(a["reminders_when_stale"], c.remindersWhenStale))
+        return ConfigError::BadPattern;
     JsonVariantConst r = d["relay"];
-    c.relayActiveHigh = r["active_high"] | c.relayActiveHigh;
-    c.relayMaxOnMs = r["max_on_ms"] | c.relayMaxOnMs;
-    c.relayTestMs = r["test_ms"] | c.relayTestMs;
-    c.snoozeMinutes = d["mute"]["snooze_min"] | c.snoozeMinutes;
-    c.muteAllAlertTypes = d["mute"]["all_types"] | c.muteAllAlertTypes;
-    c.startupCooldownSec = d["startup"]["cooldown_sec"] | c.startupCooldownSec;
-    c.alertIndicatorSteady = d["led"]["alert_steady"] | c.alertIndicatorSteady;
-    c.alertIndicatorActiveHigh = d["led"]["alert_active_high"] | c.alertIndicatorActiveHigh;
-    JsonArrayConst locs = d["locations"];
-    if (!locs.isNull()) {
-        c.selectedCount = 0;
-        for (JsonObjectConst o : locs) {
-            if (c.selectedCount >= SnapshotBuilder::kMaxSelected) break;
-            Location& L = c.selected[c.selectedCount];
-            L.uid = o["uid"] | 0;
-            L.type = locationTypeFromString(o["type"] | static_cast<const char*>(nullptr));
-            L.oblastUid = o["oblast_uid"] | 0;
-            L.raionUid = o["raion_uid"] | 0;
-            if (L.uid) ++c.selectedCount;
+    if (!overlayBool(r["active_high"], c.relayActiveHigh)) return ConfigError::BadRelayLimit;
+    if (!overlayUnsigned(r["max_on_ms"], c.relayMaxOnMs)) return ConfigError::BadRelayLimit;
+    if (!overlayUnsigned(r["test_ms"], c.relayTestMs)) return ConfigError::BadTestMs;
+    if (!overlayUnsigned(d["mute"]["snooze_min"], c.snoozeMinutes) ||
+        !overlayBool(d["mute"]["all_types"], c.muteAllAlertTypes))
+        return ConfigError::BadSnooze;
+    if (!overlayUnsigned(d["startup"]["cooldown_sec"], c.startupCooldownSec))
+        return ConfigError::BadPattern;
+    if (!overlayBool(d["led"]["alert_steady"], c.alertIndicatorSteady) ||
+        !overlayBool(d["led"]["alert_active_high"], c.alertIndicatorActiveHigh))
+        return ConfigError::BadPattern;
+
+    JsonVariantConst locValue = d["locations"];
+    if (!locValue.isNull()) {
+        if (!locValue.is<JsonArrayConst>()) return ConfigError::BadLocation;
+        JsonArrayConst locs = locValue.as<JsonArrayConst>();
+        if (locs.size() > SnapshotBuilder::kMaxSelected)
+            return ConfigError::TooManyLocations;
+        Location parsed[SnapshotBuilder::kMaxSelected];
+        uint8_t parsedCount = 0;
+        for (JsonVariantConst item : locs) {
+            if (!item.is<JsonObjectConst>()) return ConfigError::BadLocation;
+            JsonObjectConst o = item.as<JsonObjectConst>();
+            Location loc;
+            if (!overlayUnsigned(o["uid"], loc.uid) ||
+                !overlayUnsigned(o["oblast_uid"], loc.oblastUid) ||
+                !overlayUnsigned(o["raion_uid"], loc.raionUid))
+                return ConfigError::BadLocation;
+            const char* type = o["type"] | static_cast<const char*>(nullptr);
+            loc.type = locationTypeFromString(type);
+            if (loc.uid == 0 || loc.type == LocationType::Unknown)
+                return ConfigError::BadLocation;
+            for (uint8_t i = 0; i < parsedCount; ++i)
+                if (parsed[i].uid == loc.uid) return ConfigError::BadLocation;
+            parsed[parsedCount++] = loc;
         }
+        memcpy(c.selected, parsed, sizeof(Location) * parsedCount);
+        c.selectedCount = parsedCount;
     }
     JsonVariantConst profs = d["profiles"];
     if (!profs.isNull()) {
+        if (!profs.is<JsonObjectConst>()) return ConfigError::BadPattern;
         for (uint8_t i = 0; i < kAlertTypeCount; ++i) {
             JsonVariantConst o = profs[alertTypeToString(static_cast<AlertType>(i))];
             if (o.isNull()) continue;
+            if (!o.is<JsonObjectConst>()) return ConfigError::BadPattern;
             AlertProfile& p = c.profiles[i];
-            p.enabled = o["enabled"] | p.enabled;
-            p.priority = o["priority"] | p.priority;
-            patternFromJson(o["start"], p.start);
-            patternFromJson(o["end"], p.end);
-            patternFromJson(o["reminder"], p.reminder);
-            p.reminderIntervalMs = (o["reminder"]["interval_sec"] | (p.reminderIntervalMs / 1000)) * 1000UL;
+            if (!overlayBool(o["enabled"], p.enabled) ||
+                !overlayUnsigned(o["priority"], p.priority) ||
+                !patternFromJson(o["start"], p.start) ||
+                !patternFromJson(o["end"], p.end) ||
+                !patternFromJson(o["reminder"], p.reminder))
+                return ConfigError::BadPattern;
+            uint32_t intervalSec = p.reminderIntervalMs / 1000;
+            if (!overlayUnsigned(o["reminder"]["interval_sec"], intervalSec) ||
+                intervalSec > UINT32_MAX / 1000UL)
+                return ConfigError::BadPattern;
+            p.reminderIntervalMs = intervalSec * 1000UL;
         }
     }
+    return validateConfig(c);
 }
 
 } // namespace airalert

@@ -157,6 +157,17 @@ void test_boot_into_active_alert() { // SPEC 26: first snapshot already active
     TEST_ASSERT_TRUE(e.anyActive());
 }
 
+void test_reset_returns_engine_to_unknown() {
+    AlertEngine e;
+    EngineEvent ev[8];
+    apply(e, snap(Coverage::Full), ev);
+    TEST_ASSERT_TRUE(e.anyActive());
+    e.reset();
+    TEST_ASSERT_FALSE(e.synced());
+    TEST_ASSERT_FALSE(e.anyActive());
+    TEST_ASSERT_EQUAL(AlertState::Unknown, e.status(AlertType::AirRaid).state);
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_inactive_to_start);
@@ -172,5 +183,6 @@ int main() {
     RUN_TEST(test_unknown_type_slot_works);
     RUN_TEST(test_unknown_until_first_sync);
     RUN_TEST(test_boot_into_active_alert);
+    RUN_TEST(test_reset_returns_engine_to_unknown);
     return UNITY_END();
 }

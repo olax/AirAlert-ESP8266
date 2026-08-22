@@ -1,0 +1,9 @@
+# Демо: тривога область -> ескалація -> друга загроза -> відбій
+sleep 20
+start air_raid 14
+sleep 60
+start chemical 123 14
+sleep 60
+stop chemical 123
+sleep 30
+stop air_raid 14

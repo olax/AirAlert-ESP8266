@@ -60,6 +60,7 @@ public:
     // Apply one VALIDATED snapshot (SPEC 167-168). Returns number of events
     // written into `events` (up to maxEvents).
     size_t applySnapshot(const Snapshot& snap, EngineEvent* events, size_t maxEvents);
+    void reset();
 
     const TypeStatus& status(AlertType t) const { return types_[static_cast<uint8_t>(t)]; }
     bool anyActive() const;

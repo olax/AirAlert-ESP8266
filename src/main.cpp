@@ -59,9 +59,11 @@ static bool ntpStarted = false;
 static bool ntpSynced = false;
 static bool wasOnline = false;
 static bool otaInProgress = false;
+static int lastApiHttpCode = 0;
+static String lastApiError;
 
 static bool apiReady() {
-    return wifi.online() && ntpSynced && client.hasToken();
+    return wifi.online() && ntpSynced && client.hasToken() && appCfg.selectedCount > 0;
 }
 
 static void muteNow(bool longPress) {
@@ -77,11 +79,29 @@ static void prepareOta() { // Invariant 8
     relay.forceOff();
 }
 
+static void finishFailedOta() {
+    relay.forceOff();
+    otaInProgress = false;
+}
+
+static void refreshLocations() {
+    relay.forceOff();
+    notify.resetAlertState();
+    engine.reset();
+    builder.reset();
+    client.invalidateCache();
+    lastApiHttpCode = 0;
+    lastApiError = "";
+    nextPollAt = millis();
+}
+
 // Config -> subsystems (SPEC 25 step 4; re-applied after Web UI edits)
 static void applyConfig() {
     engine.setConfig({appCfg.startConfirmations, appCfg.endConfirmations,
                       appCfg.partialActive});
     notify.setMuteConfig({appCfg.snoozeMinutes * 60000u, appCfg.muteAllAlertTypes});
+    notify.setConfig({appCfg.notifyEscalation, appCfg.notifyAdditionalLocation,
+                      appCfg.remindersWhenStale, appCfg.relayTestMs});
     for (uint8_t i = 0; i < kAlertTypeCount; ++i)
         notify.setProfile(static_cast<AlertType>(i), appCfg.profiles[i]);
     relay.begin(pins::RELAY, appCfg.relayActiveHigh, appCfg.relayMaxOnMs);
@@ -155,6 +175,8 @@ static void doPoll() {
     const uint32_t t0 = millis();
     AlertsClient::Result res = client.poll(builder);
     const uint32_t latency = millis() - t0;
+    lastApiHttpCode = res.httpCode;
+    lastApiError = "";
 
     BackoffPolicy::Outcome oc;
     switch (res.kind) {
@@ -171,30 +193,37 @@ static void doPoll() {
             if (!health.online()) eventLog.log(LogEvent::ApiOnline);
             health.onContact(millis());
             oc = BackoffPolicy::Outcome::NotModified;
+            // A validated cached snapshot is still a confirmation sample.
+            applyAndNotify(builder.snapshot(), false);
             Serial.printf("[API] 304 not modified latency=%lums heap=%u\n",
                           (unsigned long)latency, ESP.getFreeHeap());
             break;
         case Kind::AuthError:
+            lastApiError = "unauthorized";
             health.onFailure();
             oc = BackoffPolicy::Outcome::AuthError;
             eventLog.log(LogEvent::Api401);
             break;
         case Kind::Forbidden:
+            lastApiError = "forbidden";
             health.onFailure();
             oc = BackoffPolicy::Outcome::AuthError;
             eventLog.log(LogEvent::Api403);
             break;
         case Kind::RateLimited:
+            lastApiError = "rate_limited";
             health.onFailure();
             oc = BackoffPolicy::Outcome::RateLimited;
             eventLog.log(LogEvent::Api429);
             break;
         case Kind::ParseError:
+            lastApiError = "parse_error";
             health.onFailure(); // snapshot NOT applied - Invariant 6
             oc = BackoffPolicy::Outcome::ParseError;
             eventLog.log(LogEvent::ApiParseError);
             break;
         default:
+            lastApiError = res.httpCode < 0 ? "network_error" : "http_error";
             if (health.online()) eventLog.log(LogEvent::ApiOffline);
             health.onFailure();
             oc = BackoffPolicy::Outcome::NetError;
@@ -327,17 +356,18 @@ void setup() {
                &eventLog, &wifi,
                [] { applyConfig(); },
                [](const String& t) {
-                   secrets.apiToken = t;
-                   secrets.save();
                    client.begin(t);
                    nextPollAt = millis(); // poll with the new token immediately
                },
+               [] { refreshLocations(); },
                [](bool longPress) { muteNow(longPress); },
                [] {
                    notify.unmute();
                    eventLog.log(LogEvent::Unmute);
                },
-               [] { prepareOta(); }});
+               [] { prepareOta(); },
+               [] { finishFailedOta(); },
+               &ntpSynced, &lastApiHttpCode, &lastApiError});
 
     if (!secrets.apiToken.length())
         Serial.println("[API] DEVICE NOT READY: no API token (SPEC 162)");
@@ -402,10 +432,10 @@ void loop() {
         eventLog.log(LogEvent::Test, "source=button");
     }
 
+    notify.setApiStale(health.stale(now));
     const bool siren = notify.tick(now);
-    const bool trippedBefore = relay.safetyTripped();
     relay.tick(siren, now);
-    if (relay.safetyTripped() && !trippedBefore)
+    if (relay.consumeSafetyTrip())
         eventLog.log(LogEvent::RelaySafetyTrip); // Invariant 2 fired
 
     updateLed(relay.isOn());

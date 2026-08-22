@@ -14,6 +14,11 @@ bool AlertEngine::anyActive() const {
     return false;
 }
 
+void AlertEngine::reset() {
+    for (auto& type : types_) type = TypeStatus{};
+    synced_ = false;
+}
+
 size_t AlertEngine::applySnapshot(const Snapshot& snap, EngineEvent* events, size_t maxEvents) {
     size_t n = 0;
     synced_ = true;

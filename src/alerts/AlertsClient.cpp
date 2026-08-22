@@ -37,8 +37,7 @@ AlertsClient::Result AlertsClient::poll(airalert::SnapshotBuilder& builder) {
 
     switch (code) {
         case HTTP_CODE_OK: {
-            if (http.header("Last-Modified").length())
-                lastModified_ = http.header("Last-Modified"); // SPEC 8
+            const String responseLastModified = http.header("Last-Modified");
             JsonDocument filter;
             airalert::buildAlertsFilter(filter);
             JsonDocument doc;
@@ -53,10 +52,20 @@ AlertsClient::Result AlertsClient::poll(airalert::SnapshotBuilder& builder) {
                 r.kind = Result::Kind::ParseError; // SPEC 167
                 break;
             }
+            lastModified_ = responseLastModified;
+            cache_.commitValidSnapshot();
             r.kind = Result::Kind::Ok;
             break;
         }
-        case HTTP_CODE_NOT_MODIFIED: r.kind = Result::Kind::NotModified; break;
+        case HTTP_CODE_NOT_MODIFIED:
+            if (cache_.canAcceptNotModified()) {
+                r.kind = Result::Kind::NotModified;
+            } else {
+                // A 304 without a validated snapshot cannot establish state.
+                lastModified_ = "";
+                r.kind = Result::Kind::ParseError;
+            }
+            break;
         case HTTP_CODE_UNAUTHORIZED: r.kind = Result::Kind::AuthError; break;   // SPEC 163
         case HTTP_CODE_FORBIDDEN: r.kind = Result::Kind::Forbidden; break;      // SPEC 164
         case HTTP_CODE_TOO_MANY_REQUESTS:                                        // SPEC 165

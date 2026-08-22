@@ -4,6 +4,7 @@
 #include <ESP8266HTTPClient.h>
 #include <WiFiClientSecureBearSSL.h>
 #include "airalert/AlertsParser.h"
+#include "airalert/ApiSnapshotCache.h"
 #include "airalert/SnapshotBuilder.h"
 
 class AlertsClient {
@@ -19,8 +20,16 @@ public:
         airalert::ParseStats stats;
     };
 
-    void begin(const String& token) { token_ = token; }
+    void begin(const String& token) {
+        if (token != token_) invalidateCache();
+        token_ = token;
+    }
     bool hasToken() const { return token_.length() > 0; }
+    void invalidateCache() {
+        lastModified_ = "";
+        cache_.invalidate();
+    }
+    bool hasCachedSnapshot() const { return cache_.canAcceptNotModified(); }
 
     // One poll: GET active.json, stream-parse into the builder.
     // The builder is only committed by the caller on Kind::Ok (SPEC 168).
@@ -29,5 +38,6 @@ public:
 private:
     String token_;
     String lastModified_;
+    airalert::ApiSnapshotCache cache_;
     BearSSL::Session session_; // TLS resumption between 15 s polls
 };

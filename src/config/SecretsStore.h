@@ -5,36 +5,49 @@
 #include <LittleFS.h>
 #include <ArduinoJson.h>
 #include <bearssl/bearssl_hash.h>
+#include <osapi.h>
+#include "AtomicJsonFile.h"
 
 struct SecretsStore {
     String wifiSsid, wifiPass, apiToken;
     String webPassHash, webSalt; // hex(sha256(salt+password)), hex salt
+    String provisioningPass;
+
+    static constexpr const char* kPath = "/secrets.json";
+    static constexpr const char* kTmpPath = "/secrets.new";
+    static constexpr const char* kBackupPath = "/secrets.bak";
+
+    bool valid() const {
+        return wifiSsid.length() <= 32 && wifiPass.length() <= 64 &&
+               apiToken.length() <= 256 &&
+               (webPassHash.length() == 0 || webPassHash.length() == 64) &&
+               (webSalt.length() == 0 || webSalt.length() == 16) &&
+               (provisioningPass.length() == 0 ||
+                (provisioningPass.length() >= 12 && provisioningPass.length() <= 32));
+    }
 
     bool load() {
-        File f = LittleFS.open("/secrets.json", "r");
-        if (!f) return false;
         JsonDocument d;
-        if (deserializeJson(d, f) != DeserializationError::Ok) return false;
+        if (!atomic_json::readWithBackup(kPath, kBackupPath, d)) return false;
         wifiSsid = d["wifi_ssid"] | "";
         wifiPass = d["wifi_pass"] | "";
         apiToken = d["api_token"] | "";
         webPassHash = d["web_pass_hash"] | "";
         webSalt = d["web_salt"] | "";
-        return wifiSsid.length() > 0;
+        provisioningPass = d["provisioning_pass"] | "";
+        return valid();
     }
 
     bool save() {
+        if (!valid()) return false;
         JsonDocument d;
         d["wifi_ssid"] = wifiSsid;
         d["wifi_pass"] = wifiPass;
         d["api_token"] = apiToken;
         d["web_pass_hash"] = webPassHash;
         d["web_salt"] = webSalt;
-        File f = LittleFS.open("/secrets.json", "w");
-        if (!f) return false;
-        serializeJson(d, f);
-        f.close();
-        return true;
+        d["provisioning_pass"] = provisioningPass;
+        return atomic_json::write(kPath, kTmpPath, kBackupPath, d);
     }
 
     static String sha256Hex(const String& in) {
@@ -54,16 +67,23 @@ struct SecretsStore {
     }
 
     void setWebPassword(const String& pass) {
+        uint8_t bytes[8];
+        os_get_random(bytes, sizeof bytes);
         char salt[17];
-        snprintf(salt, sizeof salt, "%08x%08x",
-                 static_cast<unsigned>(ESP.random()), static_cast<unsigned>(ESP.random()));
+        for (uint8_t i = 0; i < sizeof bytes; ++i)
+            snprintf(salt + i * 2, 3, "%02x", bytes[i]);
         webSalt = salt;
         webPassHash = sha256Hex(webSalt + pass); // no plaintext stored (SPEC 100)
     }
 
     bool checkWebPassword(const String& pass) const {
         if (!webPassHash.length()) return false;
-        return sha256Hex(webSalt + pass) == webPassHash;
+        const String candidate = sha256Hex(webSalt + pass);
+        if (candidate.length() != webPassHash.length()) return false;
+        uint8_t different = 0;
+        for (size_t i = 0; i < candidate.length(); ++i)
+            different |= static_cast<uint8_t>(candidate[i] ^ webPassHash[i]);
+        return different == 0;
     }
 
     bool hasWebPassword() const { return webPassHash.length() > 0; }

@@ -7,6 +7,8 @@ using namespace airalert;
 
 static EngineEvent started(AlertType t) { return {AlertEvent::Started, t}; }
 static EngineEvent ended(AlertType t) { return {AlertEvent::Ended, t}; }
+static EngineEvent escalated(AlertType t) { return {AlertEvent::Escalated, t}; }
+static EngineEvent locationAdded(AlertType t) { return {AlertEvent::LocationAdded, t}; }
 
 void test_start_plays_start_pattern() {
     NotificationEngine n;
@@ -63,6 +65,64 @@ void test_manual_test_sounds_when_muted() { // SPEC 54
     n.manualTest(200);
     TEST_ASSERT_TRUE(n.tick(200));
     TEST_ASSERT_FALSE(n.tick(801)); // 600 ms pulse done
+}
+
+void test_manual_test_uses_configured_duration() {
+    NotificationEngine n;
+    NotificationEngine::Config cfg;
+    cfg.manualTestMs = 250;
+    n.setConfig(cfg);
+    n.manualTest(0);
+    TEST_ASSERT_TRUE(n.tick(0));
+    TEST_ASSERT_TRUE(n.tick(249));
+    TEST_ASSERT_FALSE(n.tick(250));
+}
+
+void test_escalation_policy_can_disable_signal() {
+    NotificationEngine n;
+    NotificationEngine::Config cfg;
+    cfg.notifyEscalation = false;
+    n.setConfig(cfg);
+    n.onEngineEvent(escalated(AlertType::AirRaid), NotificationEngine::StartupMode::Normal, 0);
+    TEST_ASSERT_FALSE(n.tick(0));
+}
+
+void test_additional_location_policy_can_enable_signal() {
+    NotificationEngine n;
+    NotificationEngine::Config cfg;
+    cfg.notifyAdditionalLocation = true;
+    n.setConfig(cfg);
+    n.onEngineEvent(locationAdded(AlertType::AirRaid), NotificationEngine::StartupMode::Normal, 0);
+    TEST_ASSERT_TRUE(n.tick(0));
+}
+
+void test_stale_data_suppresses_reminders_by_default() {
+    NotificationEngine n;
+    AlertProfile p = defaultProfile(AlertType::AirRaid);
+    p.reminder = Pattern{true, 500, 0, 1};
+    p.reminderIntervalMs = 1000;
+    n.setProfile(AlertType::AirRaid, p);
+    n.onEngineEvent(started(AlertType::AirRaid), NotificationEngine::StartupMode::Short, 0);
+    n.tick(0);
+    n.setApiStale(true);
+    TEST_ASSERT_FALSE(n.tick(1000));
+    TEST_ASSERT_FALSE(n.tick(1001));
+}
+
+void test_stale_reminders_can_be_enabled() {
+    NotificationEngine n;
+    NotificationEngine::Config cfg;
+    cfg.remindersWhenStale = true;
+    n.setConfig(cfg);
+    AlertProfile p = defaultProfile(AlertType::AirRaid);
+    p.reminder = Pattern{true, 500, 0, 1};
+    p.reminderIntervalMs = 1000;
+    n.setProfile(AlertType::AirRaid, p);
+    n.onEngineEvent(started(AlertType::AirRaid), NotificationEngine::StartupMode::Short, 0);
+    n.tick(0);
+    n.setApiStale(true);
+    TEST_ASSERT_FALSE(n.tick(1000));
+    TEST_ASSERT_TRUE(n.tick(1001));
 }
 
 void test_end_does_not_preempt_start() { // SPEC 47
@@ -153,6 +213,11 @@ int main() {
     RUN_TEST(test_new_type_overrides_mute);
     RUN_TEST(test_muted_type_stays_silent_until_clear);
     RUN_TEST(test_manual_test_sounds_when_muted);
+    RUN_TEST(test_manual_test_uses_configured_duration);
+    RUN_TEST(test_escalation_policy_can_disable_signal);
+    RUN_TEST(test_additional_location_policy_can_enable_signal);
+    RUN_TEST(test_stale_data_suppresses_reminders_by_default);
+    RUN_TEST(test_stale_reminders_can_be_enabled);
     RUN_TEST(test_end_does_not_preempt_start);
     RUN_TEST(test_start_preempts_reminder);
     RUN_TEST(test_reminder_interval);
