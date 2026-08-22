@@ -136,6 +136,23 @@ void test_uid_string_and_number_forms() {
         b.snapshot().types[static_cast<int>(AlertType::AirRaid)].coverage);
 }
 
+void test_per_location_details() { // dashboard breakdown (SPEC 71)
+    auto b = makeBuilder({SEL_HROMADA, SEL_KYIV});
+    ParseStats st;
+    TEST_ASSERT_EQUAL(ParseError::None, run("multiple_alerts.json", b, st));
+    // location 0 = hromada 123: air_raid Full (oblast 14), artillery Full (raion 67)
+    TEST_ASSERT_EQUAL(Coverage::Full,
+        b.locCell(0, AlertType::AirRaid).coverage);
+    TEST_ASSERT_EQUAL(Coverage::Full,
+        b.locCell(0, AlertType::ArtilleryShelling).coverage);
+    TEST_ASSERT_EQUAL_INT64(parseIso8601Utc("2026-08-21T08:00:00.000Z"),
+        b.locCell(0, AlertType::AirRaid).startedAt);
+    // location 1 = Kyiv city: nothing covers it
+    TEST_ASSERT_EQUAL(Coverage::None,
+        b.locCell(1, AlertType::AirRaid).coverage);
+    TEST_ASSERT_EQUAL(31, b.selectedUid(1));
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_no_alerts);
@@ -147,5 +164,6 @@ int main() {
     RUN_TEST(test_invalid_json_rejected);
     RUN_TEST(test_missing_alerts_key_rejected);
     RUN_TEST(test_uid_string_and_number_forms);
+    RUN_TEST(test_per_location_details);
     return UNITY_END();
 }

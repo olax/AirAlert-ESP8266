@@ -56,13 +56,24 @@ static LocationCatalog catalog;
 
 static uint32_t nextPollAt = 0;
 
-// Which selected locations are covered per active type (dashboard, SPEC 71).
+// Per-location threat details (dashboard, SPEC 71).
 // Updated only on successful polls, so it always matches the engine state.
-struct ActiveView {
-    uint8_t count[kAlertTypeCount] = {};
-    uint16_t uids[kAlertTypeCount][SnapshotBuilder::kMaxSelected] = {};
-};
-static ActiveView activeView;
+static ActiveLocationView activeView;
+
+static void fillActiveView() {
+    activeView.locCount = static_cast<uint8_t>(builder.selectedCount());
+    for (size_t li = 0; li < builder.selectedCount(); ++li) {
+        activeView.uid[li] = builder.selectedUid(li);
+        uint8_t n = 0;
+        for (uint8_t t = 0; t < kAlertTypeCount; ++t) {
+            const auto& cell = builder.locCell(li, static_cast<AlertType>(t));
+            if (cell.coverage == Coverage::None) continue;
+            activeView.threats[li][n++] = {t, static_cast<uint8_t>(cell.coverage),
+                                           cell.startedAt};
+        }
+        activeView.threatCount[li] = n;
+    }
+}
 static bool ntpStarted = false;
 static bool ntpSynced = false;
 static bool wasOnline = false;
@@ -193,10 +204,7 @@ static void doPoll() {
             if (!health.online()) eventLog.log(LogEvent::ApiOnline);
             health.onContact(millis());
             oc = BackoffPolicy::Outcome::Success;
-            for (uint8_t i = 0; i < kAlertTypeCount; ++i)
-                activeView.count[i] = static_cast<uint8_t>(builder.matchedUids(
-                    static_cast<AlertType>(i), activeView.uids[i],
-                    SnapshotBuilder::kMaxSelected));
+            fillActiveView();
             applyAndNotify(builder.snapshot(), false);
             Serial.printf("[API] 200 ok alerts=%u skipped=%u active=%d latency=%lums heap=%u\n",
                           res.stats.total, res.stats.skipped, engine.anyActive(),
@@ -430,7 +438,7 @@ void setup() {
     wifi.begin(&secrets); // STA or provisioning AP (SPEC 78-81)
 
     web.begin({&appCfg, &engine, &notify, &health, &relay, &configStore, &secrets,
-               &eventLog, &wifi, activeView.count, &activeView.uids[0][0],
+               &eventLog, &wifi, &activeView,
                [] { applyConfig(); },
                [](const String& t) {
                    client.begin(t);

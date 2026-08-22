@@ -249,9 +249,24 @@ void WebUi::handleStatus() { // SPEC 127; auth required (SPEC 99 default)
         o["type"] = alertTypeToString(static_cast<AlertType>(i));
         o["coverage"] = coverageName(st.coverage);
         o["started_at"] = st.startedAt;
-        JsonArray locs = o["locations"].to<JsonArray>();
-        for (uint8_t k = 0; k < d_.activeLocCount[i]; ++k)
-            locs.add(d_.activeLocUids[i * SnapshotBuilder::kMaxSelected + k]);
+    }
+    // Per-location breakdown (SPEC 71): every selected location that has
+    // threats, each with its own coverage and start time.
+    JsonArray jlocs = d["alerts"]["locations"].to<JsonArray>();
+    if (d_.activeView) {
+        for (uint8_t li = 0; li < d_.activeView->locCount; ++li) {
+            if (!d_.activeView->threatCount[li]) continue;
+            JsonObject jl = jlocs.add<JsonObject>();
+            jl["uid"] = d_.activeView->uid[li];
+            JsonArray jt = jl["threats"].to<JsonArray>();
+            for (uint8_t k = 0; k < d_.activeView->threatCount[li]; ++k) {
+                const auto& t = d_.activeView->threats[li][k];
+                JsonObject o = jt.add<JsonObject>();
+                o["type"] = alertTypeToString(static_cast<AlertType>(t.type));
+                o["coverage"] = coverageName(static_cast<Coverage>(t.coverage));
+                o["started_at"] = t.startedAt;
+            }
+        }
     }
     d["alerts"]["active"] = any;
     d["alerts"]["muted"] = d_.notify->muted();

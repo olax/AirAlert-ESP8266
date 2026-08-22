@@ -7,11 +7,26 @@
 #include "airalert/ApiHealth.h"
 #include "airalert/Config.h"
 #include "airalert/NotificationEngine.h"
+#include "airalert/SnapshotBuilder.h"
 #include "config/ConfigStore.h"
 #include "config/SecretsStore.h"
 #include "hardware/RelayController.h"
 #include "network/WifiService.h"
 #include "storage/EventLogStore.h"
+
+// Per-location threat detail snapshot, copied from SnapshotBuilder after each
+// successful poll so the dashboard never reads a mid-parse builder state.
+struct ActiveLocationView {
+    struct Threat {
+        uint32_t startedAt; // unix seconds
+        uint8_t type;       // AlertType
+        uint8_t coverage;   // Coverage (never None here)
+    };
+    uint8_t locCount = 0;
+    uint16_t uid[airalert::SnapshotBuilder::kMaxSelected] = {};
+    uint8_t threatCount[airalert::SnapshotBuilder::kMaxSelected] = {};
+    Threat threats[airalert::SnapshotBuilder::kMaxSelected][airalert::kAlertTypeCount];
+};
 
 class WebUi {
 public:
@@ -25,10 +40,7 @@ public:
         SecretsStore* secrets;
         EventLogStore* log;
         WifiService* wifi;
-        // per-type matched selected-location uids (dashboard, SPEC 71):
-        // count[type], uids[type * SnapshotBuilder::kMaxSelected + i]
-        const uint8_t* activeLocCount;
-        const uint16_t* activeLocUids;
+        const struct ActiveLocationView* activeView; // dashboard detail (SPEC 71)
         std::function<void()> applyConfig;      // config -> subsystems
         std::function<void(const String&)> setApiToken;
         std::function<void()> refreshAlerts;    // location selection changed

@@ -27,6 +27,8 @@ public:
     void reset() {
         snap_ = AlertEngine::Snapshot{};
         for (auto& m : matchedMask_) m = 0;
+        for (auto& row : perLoc_)
+            for (auto& c : row) c = PerLocCell{};
     }
 
     void add(const Alert& a) {
@@ -40,25 +42,33 @@ public:
             if (a.startedAt > 0 &&
                 (ti.earliestStartedAt == 0 || a.startedAt < ti.earliestStartedAt))
                 ti.earliestStartedAt = a.startedAt;
+            // per-location detail for the dashboard (SPEC 71)
+            PerLocCell& cell = perLoc_[i][t];
+            if (cov > cell.coverage) cell.coverage = cov;
+            const uint32_t ts = static_cast<uint32_t>(a.startedAt);
+            if (ts > 0 && (cell.startedAt == 0 || ts < cell.startedAt))
+                cell.startedAt = ts;
         }
         ti.locationCount = static_cast<uint8_t>(__builtin_popcount(matchedMask_[t]));
     }
 
     const AlertEngine::Snapshot& snapshot() const { return snap_; }
 
-    // Which selected locations matched this type in the current snapshot
-    // (for the dashboard: SPEC 71 "Локація" column).
-    size_t matchedUids(AlertType t, uint16_t* out, size_t cap) const {
-        const uint16_t mask = matchedMask_[static_cast<uint8_t>(t)];
-        size_t n = 0;
-        for (size_t i = 0; i < selectedCount_ && n < cap; ++i)
-            if (mask & (1u << i)) out[n++] = selected_[i].uid;
-        return n;
+    // Per-location threat detail for the dashboard (SPEC 71):
+    // what covers selected location i for type t, and since when.
+    struct PerLocCell {
+        uint32_t startedAt = 0; // unix seconds; uint32 is fine until 2106
+        Coverage coverage = Coverage::None;
+    };
+    const PerLocCell& locCell(size_t selIdx, AlertType t) const {
+        return perLoc_[selIdx][static_cast<uint8_t>(t)];
     }
+    uint16_t selectedUid(size_t i) const { return selected_[i].uid; }
 
 private:
     AlertEngine::Snapshot snap_{};
     uint16_t matchedMask_[kAlertTypeCount] = {};
+    PerLocCell perLoc_[kMaxSelected][kAlertTypeCount];
     Location selected_[kMaxSelected];
     size_t selectedCount_ = 0;
     LocationMatcher matcher_{nullptr};

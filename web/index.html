@@ -206,12 +206,19 @@ async function refresh(){try{const s=await get("/api/v1/status");
  if(s.api.stale&&s.api.ever_synced){sb.classList.remove("hide");
   sb.innerHTML=`⚠ Немає актуальних даних (${s.api.last_contact_sec} с тому). Останній відомий стан ${s.alerts.active?"— <b>ТРИВОГА</b>":"— тривог не було"}.`}
  else sb.classList.add("hide");
- $("alerttbl").innerHTML=s.alerts.types.length?
-  "<tr><th>Загроза</th><th>Локації</th><th>Охоплення</th><th>Початок</th><th>Тривалість</th></tr>"+s.alerts.types.map(t=>{
-   const st=t.started_at?new Date(t.started_at*1000).toLocaleTimeString("uk-UA",{timeZone:"Europe/Kyiv",hour:"2-digit",minute:"2-digit"}):"—";
-   const d=t.started_at?fmtDur(Math.floor(Date.now()/1000-t.started_at)):"—";
-   const where=(t.locations||[]).map(locName).join(", ")||"—";
-   return `<tr><td>${TYPES[t.type]||t.type}</td><td>${where}</td><td>${t.coverage==="full"?"повна":"часткова"}</td><td>${st}</td><td>${d}</td></tr>`}).join("")
+ const fmtRow=(name,t)=>{
+  const st=t.started_at?new Date(t.started_at*1000).toLocaleTimeString("uk-UA",{timeZone:"Europe/Kyiv",hour:"2-digit",minute:"2-digit"}):"—";
+  const d=t.started_at?fmtDur(Math.floor(Date.now()/1000-t.started_at)):"—";
+  return `<tr><td>${name}</td><td>${TYPES[t.type]||t.type}</td><td>${t.coverage==="full"?"повна":"часткова"}</td><td>${st}</td><td>${d}</td></tr>`};
+ // per-location breakdown; falls back to per-type rows (e.g. dev sim)
+ let rows=[];
+ (s.alerts.locations||[]).forEach(l=>{
+  let first=true;
+  (l.threats||[]).forEach(t=>{rows.push(fmtRow(first?locName(l.uid):"", t));first=false})});
+ if(!rows.length&&s.alerts.types.length)
+  rows=s.alerts.types.map(t=>fmtRow("—",t));
+ $("alerttbl").innerHTML=rows.length?
+  "<tr><th>Локація</th><th>Загроза</th><th>Охоплення</th><th>Початок</th><th>Тривалість</th></tr>"+rows.join("")
   :"<tr><td class='mut'>Активних тривог у вибраних локаціях немає</td></tr>";
  $("dashinfo").innerHTML=`<span class="mut">Прошивка ${s.firmware} · Аптайм ${fmtDur(s.uptime_sec)} · Локацій ${s.api.selected_locations} · Час ${s.api.ntp_synced?"синхронізовано":"ще не синхронізовано"} · Останній HTTP ${s.api.last_http_code===null?"—":s.api.last_http_code} · Останній контакт з API ${s.api.last_contact_sec===null?"—":s.api.last_contact_sec+" с тому"} · Опитування кожні ${cfg?cfg.alerts.poll_sec:"…"} с</span>`;
 }catch(e){}}
