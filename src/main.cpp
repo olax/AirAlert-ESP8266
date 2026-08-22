@@ -55,6 +55,14 @@ static WebUi web;
 static LocationCatalog catalog;
 
 static uint32_t nextPollAt = 0;
+
+// Which selected locations are covered per active type (dashboard, SPEC 71).
+// Updated only on successful polls, so it always matches the engine state.
+struct ActiveView {
+    uint8_t count[kAlertTypeCount] = {};
+    uint16_t uids[kAlertTypeCount][SnapshotBuilder::kMaxSelected] = {};
+};
+static ActiveView activeView;
 static bool ntpStarted = false;
 static bool ntpSynced = false;
 static bool wasOnline = false;
@@ -185,6 +193,10 @@ static void doPoll() {
             if (!health.online()) eventLog.log(LogEvent::ApiOnline);
             health.onContact(millis());
             oc = BackoffPolicy::Outcome::Success;
+            for (uint8_t i = 0; i < kAlertTypeCount; ++i)
+                activeView.count[i] = static_cast<uint8_t>(builder.matchedUids(
+                    static_cast<AlertType>(i), activeView.uids[i],
+                    SnapshotBuilder::kMaxSelected));
             applyAndNotify(builder.snapshot(), false);
             Serial.printf("[API] 200 ok alerts=%u skipped=%u active=%d latency=%lums heap=%u\n",
                           res.stats.total, res.stats.skipped, engine.anyActive(),
@@ -217,12 +229,16 @@ static void doPoll() {
             oc = BackoffPolicy::Outcome::RateLimited;
             eventLog.log(LogEvent::Api429);
             break;
-        case Kind::ParseError:
+        case Kind::ParseError: {
             lastApiError = "parse_error";
             health.onFailure(); // snapshot NOT applied - Invariant 6
             oc = BackoffPolicy::Outcome::ParseError;
-            eventLog.log(LogEvent::ApiParseError);
+            char detail[64];
+            snprintf(detail, sizeof detail, "%s heap=%u",
+                     res.parseDetail ? res.parseDetail : "?", res.heapAtError);
+            eventLog.log(LogEvent::ApiParseError, detail); // serial + journal
             break;
+        }
         default:
             lastApiError = res.httpCode < 0 ? "network_error" : "http_error";
             if (health.online()) eventLog.log(LogEvent::ApiOffline);
@@ -414,7 +430,7 @@ void setup() {
     wifi.begin(&secrets); // STA or provisioning AP (SPEC 78-81)
 
     web.begin({&appCfg, &engine, &notify, &health, &relay, &configStore, &secrets,
-               &eventLog, &wifi,
+               &eventLog, &wifi, activeView.count, &activeView.uids[0][0],
                [] { applyConfig(); },
                [](const String& t) {
                    client.begin(t);

@@ -7,6 +7,7 @@
 #include <osapi.h>
 #include "alerts/CaBundle.h"
 #include "WebAssets.h"
+#include "airalert/SnapshotBuilder.h"
 
 using namespace airalert;
 
@@ -248,6 +249,9 @@ void WebUi::handleStatus() { // SPEC 127; auth required (SPEC 99 default)
         o["type"] = alertTypeToString(static_cast<AlertType>(i));
         o["coverage"] = coverageName(st.coverage);
         o["started_at"] = st.startedAt;
+        JsonArray locs = o["locations"].to<JsonArray>();
+        for (uint8_t k = 0; k < d_.activeLocCount[i]; ++k)
+            locs.add(d_.activeLocUids[i * SnapshotBuilder::kMaxSelected + k]);
     }
     d["alerts"]["active"] = any;
     d["alerts"]["muted"] = d_.notify->muted();

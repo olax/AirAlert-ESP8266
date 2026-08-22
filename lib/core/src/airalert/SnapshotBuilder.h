@@ -46,6 +46,16 @@ public:
 
     const AlertEngine::Snapshot& snapshot() const { return snap_; }
 
+    // Which selected locations matched this type in the current snapshot
+    // (for the dashboard: SPEC 71 "Локація" column).
+    size_t matchedUids(AlertType t, uint16_t* out, size_t cap) const {
+        const uint16_t mask = matchedMask_[static_cast<uint8_t>(t)];
+        size_t n = 0;
+        for (size_t i = 0; i < selectedCount_ && n < cap; ++i)
+            if (mask & (1u << i)) out[n++] = selected_[i].uid;
+        return n;
+    }
+
 private:
     AlertEngine::Snapshot snap_{};
     uint16_t matchedMask_[kAlertTypeCount] = {};

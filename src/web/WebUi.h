@@ -25,6 +25,10 @@ public:
         SecretsStore* secrets;
         EventLogStore* log;
         WifiService* wifi;
+        // per-type matched selected-location uids (dashboard, SPEC 71):
+        // count[type], uids[type * SnapshotBuilder::kMaxSelected + i]
+        const uint8_t* activeLocCount;
+        const uint16_t* activeLocUids;
         std::function<void()> applyConfig;      // config -> subsystems
         std::function<void(const String&)> setApiToken;
         std::function<void()> refreshAlerts;    // location selection changed

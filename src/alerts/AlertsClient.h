@@ -18,6 +18,8 @@ public:
         int httpCode = 0;
         uint32_t retryAfterSec = 0;
         airalert::ParseStats stats;
+        const char* parseDetail = nullptr; // static string, set on ParseError
+        uint32_t heapAtError = 0;
     };
 
     void begin(const String& token) {
@@ -44,6 +46,11 @@ public:
     // One poll: GET active.json, stream-parse into the builder.
     // The builder is only committed by the caller on Kind::Ok (SPEC 168).
     Result poll(airalert::SnapshotBuilder& builder);
+
+private:
+    Result::Kind parseBody(Stream& in, airalert::SnapshotBuilder& builder, Result& r);
+
+public:
 
 private:
     String token_;

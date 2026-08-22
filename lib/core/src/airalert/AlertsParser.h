@@ -36,6 +36,30 @@ inline uint16_t uidFromJson(JsonVariantConst v) {
     return static_cast<uint16_t>(r);
 }
 
+// Element-level filter: same fields, for one alert object (used by the
+// constant-memory stream parser on the device).
+inline void buildAlertElementFilter(JsonDocument& f) {
+    f["id"] = true;
+    f["alert_type"] = true;
+    f["location_type"] = true;
+    f["location_uid"] = true;
+    f["location_oblast_uid"] = true;
+    f["started_at"] = true;
+    f["calculated"] = true;
+}
+
+// One alert object -> Alert. Unknown types never abort (Invariant 9).
+inline Alert alertFromJson(JsonVariantConst o) {
+    Alert a;
+    a.id = o["id"] | 0u;
+    a.type = alertTypeFromString(o["alert_type"] | static_cast<const char*>(nullptr));
+    a.locationType = locationTypeFromString(o["location_type"] | static_cast<const char*>(nullptr));
+    a.locationUid = uidFromJson(o["location_uid"]);
+    a.oblastUid = uidFromJson(o["location_oblast_uid"]);
+    a.startedAt = parseIso8601Utc(o["started_at"] | static_cast<const char*>(nullptr));
+    return a;
+}
+
 // Walk a parsed (filtered) document. Unknown types/locations never abort:
 // they become AlertType::Unknown / skipped entries (Invariant 9).
 inline ParseError extractAlerts(JsonVariantConst root, SnapshotBuilder& b, ParseStats& st) {
@@ -44,13 +68,7 @@ inline ParseError extractAlerts(JsonVariantConst root, SnapshotBuilder& b, Parse
     b.reset();
     for (JsonObjectConst o : arr) {
         ++st.total;
-        Alert a;
-        a.id = o["id"] | 0u;
-        a.type = alertTypeFromString(o["alert_type"] | static_cast<const char*>(nullptr));
-        a.locationType = locationTypeFromString(o["location_type"] | static_cast<const char*>(nullptr));
-        a.locationUid = uidFromJson(o["location_uid"]);
-        a.oblastUid = uidFromJson(o["location_oblast_uid"]);
-        a.startedAt = parseIso8601Utc(o["started_at"] | static_cast<const char*>(nullptr));
+        Alert a = alertFromJson(o);
         if (a.locationUid == 0) { ++st.skipped; continue; }
         b.add(a);
     }

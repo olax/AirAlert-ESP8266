@@ -9,9 +9,13 @@ class FirmwareBoundaryContractTests(unittest.TestCase):
     def test_http_validator_is_committed_only_after_a_valid_snapshot(self):
         source = (ROOT / "src/alerts/AlertsClient.cpp").read_text()
 
-        parsed = source.index("airalert::extractAlerts")
+        # streaming per-element parser replaced whole-document extractAlerts
+        # (constant memory vs nationwide alert count); the contract is the
+        # same: the cache validator commits only after a fully valid body
+        parsed = source.index("parseBody(http.getStream()")
         committed = source.index("lastModified_ = responseLastModified")
         self.assertLess(parsed, committed)
+        self.assertIn("buildAlertElementFilter", source)
         self.assertIn("cache_.commitValidSnapshot()", source[committed:])
         self.assertNotIn("new BearSSL::WiFiClientSecure", source)
         self.assertNotIn("setInsecure", source)
