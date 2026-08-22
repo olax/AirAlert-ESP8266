@@ -32,7 +32,7 @@ stateDiagram-v2
 
 | Шар | Де | Залежності | Тести |
 |---|---|---|---|
-| Чиста логіка | `lib/core/` | тільки C++17 + ArduinoJson | 86 native-тестів |
+| Чиста логіка | `lib/core/` | тільки C++17 + ArduinoJson | 100 native-тестів |
 | Транспорт | `src/alerts/` | BearSSL, HTTPClient | live на платі |
 | Залізо | `src/hardware/` | Arduino GPIO | commissioning |
 | Мережа | `src/network/` | ESP8266WiFi, DNSServer | live |

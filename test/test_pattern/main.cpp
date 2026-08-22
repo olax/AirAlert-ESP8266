@@ -81,6 +81,17 @@ void test_relay_guard_wraparound() {
     TEST_ASSERT_FALSE(g.tick(true, 0xFFFFF000u + 30000u)); // wraps, still trips
 }
 
+void test_relay_guard_async_trip_requires_request_release() {
+    RelayGuard g(30000);
+    TEST_ASSERT_TRUE(g.tick(true, 100));
+    g.trip();
+    TEST_ASSERT_TRUE(g.tripped());
+    TEST_ASSERT_FALSE(g.tick(true, 101));
+    TEST_ASSERT_FALSE(g.tick(false, 102));
+    TEST_ASSERT_FALSE(g.tripped());
+    TEST_ASSERT_TRUE(g.tick(true, 103));
+}
+
 void test_queue_priority_order() { // SPEC 47
     NotificationQueue q;
     q.push({Signal::Reminder, AlertType::AirRaid, 50});
@@ -180,6 +191,7 @@ int main() {
     RUN_TEST(test_millis_wraparound);
     RUN_TEST(test_relay_guard_limit);
     RUN_TEST(test_relay_guard_wraparound);
+    RUN_TEST(test_relay_guard_async_trip_requires_request_release);
     RUN_TEST(test_queue_priority_order);
     RUN_TEST(test_queue_profile_priority);
     RUN_TEST(test_queue_coalescing);

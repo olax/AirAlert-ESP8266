@@ -21,16 +21,25 @@ public:
         // Persisted random secret: recovery remains possible without making
         // the AP password derivable from the public chip id.
         if (secrets_->provisioningPass.length() < 12) {
-            secrets_->provisioningPass = makeProvisioningPass();
-            if (!secrets_->save())
+            SecretsStore next = *secrets_;
+            next.provisioningPass = makeProvisioningPass();
+            if (next.save())
+                *secrets_ = next;
+            else
                 Serial.println("[WIFI] failed to persist provisioning password");
+            apPass_ = next.provisioningPass;
+        } else {
+            apPass_ = secrets_->provisioningPass;
         }
-        apPass_ = secrets_->provisioningPass;
         if (secrets_->wifiSsid.length()) startSta();
         else startProvisioning("no Wi-Fi credentials");
     }
 
     void tick(uint32_t now) {
+        if (provisionAt_ && static_cast<int32_t>(now - provisionAt_) >= 0) {
+            provisionAt_ = 0;
+            startProvisioning("credentials cleared");
+        }
         if (state_ == State::Provisioning) {
             dns_.processNextRequest();
             // keep retrying STA in the background if we have credentials (SPEC 81)
@@ -59,11 +68,16 @@ public:
     // From portal/serial: try new credentials immediately.
     void applyNewCredentials() { startSta(); }
 
-    void forget() { // SPEC 82
+    bool forget() { // SPEC 82
+        SecretsStore old = *secrets_;
         secrets_->wifiSsid = "";
         secrets_->wifiPass = "";
-        secrets_->save();
-        startProvisioning("credentials cleared");
+        if (!secrets_->save()) {
+            *secrets_ = old;
+            return false;
+        }
+        provisionAt_ = millis() + 500;
+        return true;
     }
 
     State state() const { return state_; }
@@ -122,4 +136,5 @@ private:
     String apSsid_, apPass_;
     uint32_t staDeadline_ = 0;
     uint32_t nextRetryAt_ = 0;
+    uint32_t provisionAt_ = 0;
 };

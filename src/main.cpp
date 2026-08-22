@@ -166,7 +166,8 @@ static void applyAndNotify(const AlertEngine::Snapshot& snap, bool simulated) {
         pstate.alertFingerprint = StartupPolicy::fingerprint(snap);
         if (n > 0 || startupMode == NotificationEngine::StartupMode::Short)
             pstate.startupNotifAtUtc = time(nullptr);
-        stateStore.save(pstate);
+        if (!stateStore.save(pstate))
+            Serial.println("[STATE] persistence failed");
     }
 }
 
@@ -240,23 +241,72 @@ static void handleSerialLine(String line) {
     if (line.startsWith("setwifi ")) {
         const int sp = line.indexOf(' ', 8);
         if (sp < 0) { Serial.println("[CFG] usage: setwifi <ssid> <pass>"); return; }
-        secrets.wifiSsid = line.substring(8, sp);
-        secrets.wifiPass = line.substring(sp + 1);
-        Serial.printf("[CFG] wifi ssid='%s' %s\n", secrets.wifiSsid.c_str(),
-                      secrets.save() ? "saved, restarting" : "SAVE FAILED");
+        SecretsStore next = secrets;
+        next.wifiSsid = line.substring(8, sp);
+        next.wifiPass = line.substring(sp + 1);
+        if (!next.wifiSsid.length() || next.wifiSsid.length() > 32 ||
+            next.wifiPass.length() > 64 || !next.save()) {
+            Serial.println("[CFG] invalid Wi-Fi credentials or SAVE FAILED");
+            return;
+        }
+        secrets = next;
+        Serial.printf("[CFG] wifi ssid='%s' saved, restarting\n", secrets.wifiSsid.c_str());
         delay(500);
         ESP.restart();
     } else if (line.startsWith("settoken ")) {
-        secrets.apiToken = line.substring(9);
-        Serial.printf("[CFG] token %s\n", secrets.save() ? "saved, restarting" : "SAVE FAILED");
+        SecretsStore next = secrets;
+        next.apiToken = line.substring(9);
+        if (next.apiToken.length() < 10 || next.apiToken.length() > 256 || !next.save()) {
+            Serial.println("[CFG] invalid token or SAVE FAILED");
+            return;
+        }
+        secrets = next;
+        Serial.println("[CFG] token saved, restarting");
         delay(500);
         ESP.restart();
     } else if (line.startsWith("setpass ")) {
-        secrets.setWebPassword(line.substring(8));
-        Serial.printf("[CFG] web password %s\n", secrets.save() ? "saved" : "SAVE FAILED");
+        const String password = line.substring(8);
+        if (password.length() < 6 || password.length() > 128) {
+            Serial.println("[CFG] web password must be 6..128 characters");
+            return;
+        }
+        SecretsStore next = secrets;
+        next.setWebPassword(password);
+        if (!next.save()) {
+            Serial.println("[CFG] web password SAVE FAILED");
+            return;
+        }
+        secrets = next;
+        Serial.println("[CFG] web password saved");
+    } else if (line.startsWith("setmock")) { // dev: emulator URL, empty = real API
+#ifdef AIRALERT_DEV
+        String mockUrl = line.length() > 8 ? line.substring(8) : "";
+        mockUrl.trim();
+        if (mockUrl.length() > 192 ||
+            (mockUrl.length() && !mockUrl.startsWith("http://") &&
+             !mockUrl.startsWith("https://"))) {
+            Serial.println("[CFG] usage: setmock [http(s)://host:port/path]");
+            return;
+        }
+        SecretsStore next = secrets;
+        next.mockUrl = mockUrl;
+        if (!next.save()) {
+            Serial.println("[CFG] mock URL SAVE FAILED");
+            return;
+        }
+        secrets = next;
+        Serial.printf("[CFG] mock url %s, restarting\n",
+                      secrets.mockUrl.length() ? "set" : "cleared");
+        delay(300);
+        ESP.restart();
+#else
+        Serial.println("[CFG] dev build only");
+#endif
     } else if (line == "forgetwifi") { // SPEC 82
-        eventLog.log(LogEvent::ConfigChanged, "wifi_forget");
-        wifi.forget();
+        if (wifi.forget())
+            eventLog.log(LogEvent::ConfigChanged, "wifi_forget");
+        else
+            Serial.println("[CFG] Wi-Fi credentials SAVE FAILED");
     } else if (line == "show") { // secrets never printed (SPEC 6)
         Serial.printf("[CFG] ssid='%s' token: %s webpass: %s\n", secrets.wifiSsid.c_str(),
                       secrets.apiToken.length() ? "configured" : "MISSING",
@@ -281,7 +331,7 @@ static void handleSerialLine(String line) {
         serializeJson(d, Serial);
         Serial.println();
     } else if (line == "log") {
-        for (const char* path : {"/log/ev.0", "/log/ev.1"}) {
+        for (const char* path : {eventLog.olderPath(), eventLog.activePath()}) {
             File f = LittleFS.open(path, "r");
             if (!f) continue;
             while (f.available()) Serial.write(f.read());
@@ -304,7 +354,7 @@ static void handleSerialLine(String line) {
         Serial.println("[SIM] dev build only");
 #endif
     } else if (line.length()) {
-        Serial.println("[CFG] setwifi|settoken|setpass|forgetwifi|show|restart|mute|unmute|test|status|config|log|sim");
+        Serial.println("[CFG] setwifi|settoken|setpass|setmock|forgetwifi|show|restart|mute|unmute|test|status|config|log|sim");
     }
 }
 
@@ -348,8 +398,19 @@ void setup() {
     eventLog.begin();
     eventLog.log(LogEvent::Boot, ESP.getResetReason().c_str());
 
-    secrets.load();
+    if (!secrets.load())
+        Serial.println("[CFG] secrets missing or invalid; using setup defaults");
     client.begin(secrets.apiToken);
+#ifdef AIRALERT_DEV
+    String mockUrl = secrets.mockUrl;
+#ifdef AIRALERT_MOCK_URL
+    if (!mockUrl.length()) mockUrl = AIRALERT_MOCK_URL;
+#endif
+    if (mockUrl.length()) {
+        client.setMockUrl(mockUrl);
+        Serial.printf("[API] MOCK MODE: %s\n", mockUrl.c_str());
+    }
+#endif
     wifi.begin(&secrets); // STA or provisioning AP (SPEC 78-81)
 
     web.begin({&appCfg, &engine, &notify, &health, &relay, &configStore, &secrets,

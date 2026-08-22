@@ -19,6 +19,9 @@ button{width:100%;margin-top:18px;background:#4d9fec;color:#fff;border:0;border-
 <h1>🚨 AirAlert</h1>
 <p>Перше налаштування пристрою. Після збереження пристрій перезавантажиться
 і підключиться до вашої мережі.</p>
+<label>Ключ налаштування</label>
+<input id="skey" type="password" autocomplete="one-time-code" placeholder="Пароль точки доступу AirAlert">
+<p>Це випадковий пароль точки доступу AirAlert, надрукований у Serial Monitor.</p>
 <label>Wi-Fi мережа</label>
 <select id="ssid"><option>Сканування…</option></select>
 <label>Або введіть SSID вручну</label>
@@ -40,9 +43,10 @@ fetch("/api/v1/scan").then(r=>r.json()).then(d=>{
  $("ssid").innerHTML="<option value=''>— виберіть —</option>"+
   d.networks.map(n=>`<option>${n.ssid}</option>`).join("")}).catch(()=>{});
 async function save(){
- const body={wifi_ssid:$("ssid").value||$("ssidm").value,wifi_pass:$("wpass").value,
+ const body={setup_key:$("skey").value,wifi_ssid:$("ssid").value||$("ssidm").value,wifi_pass:$("wpass").value,
   api_token:$("tok").value,admin_pass:$("apass").value,device_name:$("dname").value};
  if(!body.wifi_ssid){$("msg").textContent="Вкажіть Wi-Fi мережу";return}
+ if(!body.setup_key){$("msg").textContent="Вкажіть ключ налаштування";return}
  if(!body.admin_pass||body.admin_pass.length<6){$("msg").textContent="Пароль адміністратора: мінімум 6 символів";return}
  try{const r=await fetch("/api/v1/setup",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
   if(!r.ok){const e=await r.json().catch(()=>({}));$("msg").textContent="Помилка: "+(e.error?e.error.message:r.status);return}

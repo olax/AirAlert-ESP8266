@@ -9,7 +9,7 @@
 - Ядро: AlertEngine (підтвердження 1/2, escalation, multi-location),
   LocationMatcher (ієрархія, каталог 155 локацій), PatternScheduler,
   NotificationEngine (черга, пріоритети, mute-політики), RelayGuard,
-  StartupPolicy (анти-reboot-loop), 86 native-тестів
+  StartupPolicy (анти-reboot-loop), 100 native-тестів
 - API-клієнт: BearSSL + GTS trust anchors, TLS session resumption,
   If-Modified-Since/304, backoff 15→120с, стрімінг-парсинг з фільтром
 - Персистентність: атомарний конфіг зі схемою і міграцією, циркулярний

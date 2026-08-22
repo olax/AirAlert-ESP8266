@@ -60,13 +60,15 @@ struct AppConfig {
 };
 
 enum class ConfigError : uint8_t {
-    None, BadDeviceName, BadPollInterval, BadStaleInterval, BadConfirmations,
+    None, BadSchema, BadDeviceName, BadPollInterval, BadStaleInterval, BadConfirmations,
     BadRelayLimit, BadTestMs, BadSnooze, TooManyLocations, BadLocation,
     BadPattern
 };
 
 // Hard limits (SPEC 42, 155): backend validation, never UI-only.
 inline ConfigError validateConfig(const AppConfig& c) {
+    if (c.schemaVersion == 0 || c.schemaVersion > kConfigSchema)
+        return ConfigError::BadSchema;
     const size_t nameLen = strnlen(c.deviceName, sizeof c.deviceName);
     if (nameLen == 0 || nameLen >= sizeof c.deviceName) return ConfigError::BadDeviceName;
     if (c.pollIntervalSec < 10 || c.pollIntervalSec > 600) return ConfigError::BadPollInterval;
@@ -192,7 +194,10 @@ inline void configToJson(const AppConfig& c, JsonDocument& d) {
 // Invalid values fail instead of being narrowed or silently truncated.
 inline ConfigError configFromJson(JsonVariantConst d, AppConfig& c) {
     if (!d.is<JsonObjectConst>()) return ConfigError::BadPattern;
-    if (!overlayUnsigned(d["schema"], c.schemaVersion)) return ConfigError::BadPattern;
+    if (!overlayUnsigned(d["schema"], c.schemaVersion)) return ConfigError::BadSchema;
+    for (const char* section : {"device", "alerts", "relay", "mute", "startup", "led"})
+        if (!d[section].isNull() && !d[section].is<JsonObjectConst>())
+            return ConfigError::BadPattern;
     const char* name = d["device"]["name"] | static_cast<const char*>(nullptr);
     if (name) {
         const size_t len = strlen(name);

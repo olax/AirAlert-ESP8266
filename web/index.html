@@ -87,6 +87,13 @@ button.btn.warn{background:#a35b18}button.btn.bad{background:#a33030}button.btn.
 <div id="profform"></div>
 <div style="margin-top:10px"><button class="btn" onclick="saveConfig()">Зберегти</button></div>
 </div>
+<div class="card">
+<h2>Політика сповіщень</h2>
+<div class="row"><label><input type="checkbox" id="n_esc"> Сигналізувати посилення загрози</label></div>
+<div class="row"><label><input type="checkbox" id="n_loc"> Сигналізувати додаткову охоплену локацію</label></div>
+<div class="row"><label><input type="checkbox" id="n_stale"> Нагадувати, навіть якщо дані API застаріли</label></div>
+<button class="btn" onclick="saveConfig()">Зберегти</button>
+</div>
 </section>
 
 <section id="t-relay" class="hide">
@@ -177,7 +184,8 @@ const hdrs=()=>({"Content-Type":"application/json","X-Auth":tok||""});
 async function req(m,u,b){const r=await fetch(u,{method:m,headers:hdrs(),body:b?JSON.stringify(b):undefined});
  if(r.status===401){sessionStorage.removeItem("t");$("login").classList.remove("hide");throw new Error("auth")}
  if(!r.ok){const e=await r.json().catch(()=>({}));throw new Error(e.error?e.error.message:r.status)}
- const ct=r.headers.get("content-type")||"";return ct.includes("json")?r.json():r.text()}
+ const ct=(r.headers.get("content-type")||"").toLowerCase();
+ const isJson=ct.includes("application/json")||ct.includes("+json");return isJson?r.json():r.text()}
 const get=u=>req("GET",u),post=(u,b)=>req("POST",u,b),put=(u,b)=>req("PUT",u,b);
 async function login(){try{const r=await fetch("/api/v1/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({password:$("pw").value})});
  if(!r.ok){$("loginmsg").textContent=r.status===429?"Забагато спроб — зачекайте хвилину":"Невірний пароль";return}
@@ -190,7 +198,8 @@ async function refresh(){try{const s=await get("/api/v1/status");
  if(s.alerts.muted)b.push(badge("🔇 Заглушено","warn"));if(s.relay.active)b.push(badge("РЕЛЕ УВІМК","bad"));
  if(s.relay.tripped)b.push(badge("Захист реле!","bad"));$("badges").innerHTML=b.join("");
  const ab=$("alertbox");
- if(!s.api.ever_synced){ab.className="big unknown";ab.textContent="Очікування першої синхронізації…"}
+ if(!s.api.ever_synced){const why={locations:"Оберіть щонайменше одну локацію",wifi:"Очікування підключення Wi-Fi…",token:"Вкажіть API токен",time:"Синхронізація часу…",unauthorized:"API відхилив токен (401)",forbidden:"API заборонив доступ (403)",rate_limited:"API тимчасово обмежив запити (429)",parse_error:"API повернув некоректні дані",network_error:"Немає зв’язку з API",http_error:"Помилка відповіді API",api:"Очікування першої відповіді API…"};
+  ab.className="big unknown";ab.textContent=why[s.api.waiting_reason]||"Очікування першої синхронізації…"}
  else if(s.alerts.active){ab.className="big alert";ab.textContent="🔴 "+(s.alerts.types.map(t=>TYPES[t.type]||t.type).join(" + "))}
  else{ab.className="big clear";ab.textContent="Тривог немає"}
  const sb=$("stalebox");
@@ -203,13 +212,14 @@ async function refresh(){try{const s=await get("/api/v1/status");
    const d=t.started_at?fmtDur(Math.floor(Date.now()/1000-t.started_at)):"—";
    return `<tr><td>${TYPES[t.type]||t.type}</td><td>${t.coverage==="full"?"повна":"часткова"}</td><td>${st}</td><td>${d}</td></tr>`}).join("")
   :"<tr><td class='mut'>Активних тривог у вибраних локаціях немає</td></tr>";
- $("dashinfo").innerHTML=`<span class="mut">Прошивка ${s.firmware} · Аптайм ${fmtDur(s.uptime_sec)} · Останній контакт з API ${s.api.last_contact_sec===null?"—":s.api.last_contact_sec+" с тому"} · Опитування кожні ${cfg?cfg.alerts.poll_sec:"…"} с</span>`;
+ $("dashinfo").innerHTML=`<span class="mut">Прошивка ${s.firmware} · Аптайм ${fmtDur(s.uptime_sec)} · Локацій ${s.api.selected_locations} · Час ${s.api.ntp_synced?"синхронізовано":"ще не синхронізовано"} · Останній HTTP ${s.api.last_http_code===null?"—":s.api.last_http_code} · Останній контакт з API ${s.api.last_contact_sec===null?"—":s.api.last_contact_sec+" с тому"} · Опитування кожні ${cfg?cfg.alerts.poll_sec:"…"} с</span>`;
 }catch(e){}}
 function fmtDur(s){if(s<0||s==null)return"—";const h=Math.floor(s/3600),m=Math.floor(s%3600/60);return h?`${h} год ${m} хв`:m?`${m} хв`:`${s} с`}
 async function loadCfg(){cfg=await get("/api/v1/config");
  $("r_ah").value=cfg.relay.active_high?"1":"0";$("r_max").value=cfg.relay.max_on_ms;$("r_test").value=cfg.relay.test_ms;
  $("l_steady").checked=cfg.led.alert_steady;$("l_ah").value=cfg.led.alert_active_high?"1":"0";
  $("p_act").checked=cfg.alerts.partial_active;$("p_sir").checked=cfg.alerts.partial_siren;$("p_led").checked=cfg.alerts.partial_led;
+ $("n_esc").checked=cfg.alerts.notify_escalation;$("n_loc").checked=cfg.alerts.notify_additional_location;$("n_stale").checked=cfg.alerts.reminders_when_stale;
  $("a_poll").value=cfg.alerts.poll_sec;$("a_stale").value=cfg.alerts.stale_sec;
  selected=(cfg.locations||[]).map(l=>l.uid);
  const sel=$("ptype");sel.innerHTML=Object.keys(cfg.profiles).map(k=>`<option value="${k}">${TYPES[k]||k}</option>`).join("");
@@ -232,6 +242,7 @@ async function saveConfig(){try{if(cfg.profiles&&$("profform").innerHTML)collect
  cfg.relay.active_high=$("r_ah").value==="1";cfg.relay.max_on_ms=+$("r_max").value;cfg.relay.test_ms=+$("r_test").value;
  cfg.led.alert_steady=$("l_steady").checked;cfg.led.alert_active_high=$("l_ah").value==="1";
  cfg.alerts.partial_active=$("p_act").checked;cfg.alerts.partial_siren=$("p_sir").checked;cfg.alerts.partial_led=$("p_led").checked;
+ cfg.alerts.notify_escalation=$("n_esc").checked;cfg.alerts.notify_additional_location=$("n_loc").checked;cfg.alerts.reminders_when_stale=$("n_stale").checked;
  cfg.alerts.poll_sec=+$("a_poll").value;cfg.alerts.stale_sec=+$("a_stale").value;
  await put("/api/v1/config",cfg);alert("Збережено");refresh()}catch(e){alert("Помилка: "+e.message)}}
 async function loadCat(){cat=(await get("/locations.json")).locations;renderLocs()}
@@ -249,10 +260,10 @@ async function loadTok(){try{const s=await get("/api/v1/status");$("tokstate").t
 async function testRelay(){if(!confirm("Фізично увімкнути реле на "+$("r_test").value+" мс?"))return;
  try{await post("/api/v1/test/relay")}catch(e){alert("Помилка: "+e.message)}}
 async function relayOff(){try{await post("/api/v1/relay/off");refresh()}catch(e){}}
-async function loadLog(){try{const t=await get("/api/v1/events");
+async function loadLog(){try{const t=await get("/api/v1/events?ts="+Date.now());
  $("logbody").textContent=t.trim().split("\n").reverse().map(l=>{try{const r=JSON.parse(l);
   const ts=r.ts?new Date(r.ts*1000).toLocaleString("uk-UA",{timeZone:"Europe/Kyiv"}):"(до синхр. часу)";
-  return `${ts}  ${r.event}${r.detail?"  "+r.detail:""}`}catch(e){return l}}).join("\n")||"порожньо"}catch(e){}}
+  return `${ts}  ${r.event}${r.detail?"  "+r.detail:""}`}catch(e){return l}}).join("\n")||"Журнал ще порожній"}catch(e){$("logbody").textContent="Не вдалося завантажити журнал: "+e.message}}
 async function otaUpload(){const f=$("otafile").files[0];
  if(!f){$("otamsg").textContent="Виберіть файл";return}
  if(!confirm("Прошити "+f.name+" ("+Math.round(f.size/1024)+" КБ)?"))return;

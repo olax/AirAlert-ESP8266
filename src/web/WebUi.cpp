@@ -83,21 +83,24 @@ void WebUi::begin(const Deps& d) {
     server_.on("/api/v1/setup", HTTP_POST, [this] { handleSetup(); });
     server_.on("/api/v1/wifi/forget", HTTP_POST, [this] { // SPEC 82
         if (!authed()) return;
-        server_.send(200, "application/json", "{\"ok\":true}");
+        if (!d_.wifi->forget()) {
+            sendError(500, "FS_ERROR", "cannot clear Wi-Fi credentials");
+            return;
+        }
         d_.log->log(LogEvent::ConfigChanged, "wifi_forget");
-        d_.wifi->forget();
+        server_.send(200, "application/json", "{\"ok\":true}");
     });
     server_.on("/api/v1/ota/upload", HTTP_POST,
                [this] { // final response after upload completes
                    if (!otaUploadAuthorized_) return;
                    if (!otaUploadSucceeded_ || Update.hasError()) {
                        d_.log->log(LogEvent::OtaFailed);
-                       const char* error = Update.hasError()
-                                               ? Update.getErrorString().c_str()
-                                               : "upload incomplete";
+                       const String error = Update.hasError()
+                                                ? Update.getErrorString()
+                                                : String("upload incomplete");
                        Update.end();
                        d_.finishFailedOta();
-                       sendError(500, "OTA_FAILED", error);
+                       sendError(500, "OTA_FAILED", error.c_str());
                    } else {
                        d_.log->log(LogEvent::OtaSuccess);
                        server_.send(200, "application/json", "{\"ok\":true}");
@@ -336,9 +339,15 @@ void WebUi::handleTokenPut() { // write-only (SPEC 91)
 
 void WebUi::handleEvents() {
     if (!authed()) return;
+    if (!d_.log->healthy()) {
+        sendError(500, "JOURNAL_ERROR", "event journal storage is unavailable");
+        return;
+    }
+    server_.sendHeader("Cache-Control", "no-store");
     server_.setContentLength(CONTENT_LENGTH_UNKNOWN);
     server_.send(200, "application/x-ndjson", "");
-    for (const char* path : {"/log/ev.0", "/log/ev.1"}) {
+    // Stream oldest -> newest; the UI reverses records for newest-first view.
+    for (const char* path : {d_.log->olderPath(), d_.log->activePath()}) {
         File f = LittleFS.open(path, "r");
         if (!f) continue;
         uint8_t buf[256];
@@ -450,7 +459,8 @@ void WebUi::handleSetup() { // SPEC 80
     if (token.length()) nextSecrets.apiToken = token;
     if (apass.length() >= 6) nextSecrets.setWebPassword(apass);
     if (!nextSecrets.save()) {
-        d_.configStore->save(oldConfig);
+        if (!d_.configStore->save(oldConfig))
+            Serial.println("[SETUP] failed to restore previous device config");
         sendError(500, "FS_ERROR", "cannot persist secrets");
         return;
     }

@@ -1,7 +1,8 @@
 # REST API
 
-База: `http://<ip>/api/v1/`. Всі запити (крім login і setup при першому
-запуску) вимагають заголовок `X-Auth: <token>` із відповіді login.
+База: `http://<ip>/api/v1/`. Всі запити (крім login, scan і setup з правильним
+`setup_key` у provisioning-режимі) вимагають заголовок
+`X-Auth: <token>` із відповіді login.
 Формат помилок: `{"ok":false,"error":{"code":"...","message":"..."}}`.
 
 ## Автентифікація
@@ -14,7 +15,7 @@
 
 | GET | Що повертає |
 |---|---|
-| /status | стан пристрою: wifi, api{online,stale,ever_synced,token_present}, alerts{active,muted,types[]}, relay{active,tripped} |
+| /status | стан пристрою: wifi, api{online,stale,ever_synced,ntp_synced,selected_locations,last_http_code,last_error,waiting_reason,token_present}, alerts{active,muted,types[]}, relay{active,tripped} |
 | /config | повний конфіг (без секретів) |
 | /events | журнал подій, NDJSON |
 | /system | heap/flash/fs/rssi/версії |
@@ -29,7 +30,7 @@
 | /relay/off | ручне вимкнення: стоп патернів + реле OFF |
 | /reboot | перезавантаження |
 | /wifi/forget | скинути Wi-Fi → provisioning AP |
-| /setup | первинне налаштування (портал); без auth тільки поки не задано пароль |
+| /setup | первинне налаштування: `setup_key`, Wi-Fi, API token, admin password, device name |
 | /ota/upload | multipart firmware.bin |
 | /ota/url | `{"url":"https://...","sha256":"<64hex>"}` — sha256 обовʼязковий |
 

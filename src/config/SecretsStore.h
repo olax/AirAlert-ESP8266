@@ -11,6 +11,7 @@
 struct SecretsStore {
     String wifiSsid, wifiPass, apiToken;
     String webPassHash, webSalt; // hex(sha256(salt+password)), hex salt
+    String mockUrl;              // dev-only emulator URL, empty in normal use
     String provisioningPass;
 
     static constexpr const char* kPath = "/secrets.json";
@@ -18,10 +19,17 @@ struct SecretsStore {
     static constexpr const char* kBackupPath = "/secrets.bak";
 
     bool valid() const {
+        const bool passwordEmpty = webPassHash.length() == 0 && webSalt.length() == 0;
+        const bool passwordSet = webPassHash.length() == 64 && webSalt.length() == 16;
+        const bool mockUrlValid = mockUrl.length() == 0 ||
+            (mockUrl.length() <= 192 &&
+             (mockUrl.startsWith("http://") || mockUrl.startsWith("https://")));
         return wifiSsid.length() <= 32 && wifiPass.length() <= 64 &&
-               apiToken.length() <= 256 &&
-               (webPassHash.length() == 0 || webPassHash.length() == 64) &&
-               (webSalt.length() == 0 || webSalt.length() == 16) &&
+               (wifiSsid.length() > 0 || wifiPass.length() == 0) &&
+               (apiToken.length() == 0 ||
+                (apiToken.length() >= 10 && apiToken.length() <= 256)) &&
+               (passwordEmpty || passwordSet) &&
+               mockUrlValid &&
                (provisioningPass.length() == 0 ||
                 (provisioningPass.length() >= 12 && provisioningPass.length() <= 32));
     }
@@ -29,13 +37,17 @@ struct SecretsStore {
     bool load() {
         JsonDocument d;
         if (!atomic_json::readWithBackup(kPath, kBackupPath, d)) return false;
-        wifiSsid = d["wifi_ssid"] | "";
-        wifiPass = d["wifi_pass"] | "";
-        apiToken = d["api_token"] | "";
-        webPassHash = d["web_pass_hash"] | "";
-        webSalt = d["web_salt"] | "";
-        provisioningPass = d["provisioning_pass"] | "";
-        return valid();
+        SecretsStore next = *this;
+        next.wifiSsid = d["wifi_ssid"] | "";
+        next.wifiPass = d["wifi_pass"] | "";
+        next.apiToken = d["api_token"] | "";
+        next.webPassHash = d["web_pass_hash"] | "";
+        next.webSalt = d["web_salt"] | "";
+        next.provisioningPass = d["provisioning_pass"] | "";
+        next.mockUrl = d["mock_url"] | "";
+        if (!next.valid()) return false;
+        *this = next;
+        return true;
     }
 
     bool save() {
@@ -46,6 +58,7 @@ struct SecretsStore {
         d["api_token"] = apiToken;
         d["web_pass_hash"] = webPassHash;
         d["web_salt"] = webSalt;
+        if (mockUrl.length()) d["mock_url"] = mockUrl;
         d["provisioning_pass"] = provisioningPass;
         return atomic_json::write(kPath, kTmpPath, kBackupPath, d);
     }

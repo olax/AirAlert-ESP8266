@@ -2,7 +2,7 @@
 
 ## Чекліст перед тегом (SPEC 206, 210)
 
-- [ ] `pio test -e native` — 86/86
+- [ ] `pio test -e native` — 100/100
 - [ ] `pio run -e nodemcuv2_prod` — розмір < 900 КБ
 - [ ] Чистий флеш: erase-flash → прошивка → provisioning AP → повний цикл
       налаштування → тривога симулюється → OTA на ту саму версію

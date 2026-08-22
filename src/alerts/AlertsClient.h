@@ -31,6 +31,16 @@ public:
     }
     bool hasCachedSnapshot() const { return cache_.canAcceptNotModified(); }
 
+#ifdef AIRALERT_DEV
+    // Dev-only: poll a local/tunneled emulator instead of production.
+    // Set via serial `setmock <url>`; production builds compile this out.
+    void setMockUrl(const String& url) {
+        if (url != mockUrl_) invalidateCache();
+        mockUrl_ = url;
+    }
+    bool mocked() const { return mockUrl_.length() > 0; }
+#endif
+
     // One poll: GET active.json, stream-parse into the builder.
     // The builder is only committed by the caller on Kind::Ok (SPEC 168).
     Result poll(airalert::SnapshotBuilder& builder);
@@ -38,6 +48,9 @@ public:
 private:
     String token_;
     String lastModified_;
+#ifdef AIRALERT_DEV
+    String mockUrl_;
+#endif
     airalert::ApiSnapshotCache cache_;
     BearSSL::Session session_; // TLS resumption between 15 s polls
 };

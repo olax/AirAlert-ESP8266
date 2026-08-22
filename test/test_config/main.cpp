@@ -111,6 +111,19 @@ void test_json_rejects_overflow_and_overlong_name() {
                       configFromJson(d.as<JsonVariantConst>(), c));
 }
 
+void test_json_rejects_future_schema_and_malformed_sections() {
+    AppConfig c;
+    JsonDocument future;
+    future["schema"] = kConfigSchema + 1;
+    TEST_ASSERT_EQUAL(ConfigError::BadSchema,
+                      configFromJson(future.as<JsonVariantConst>(), c));
+
+    JsonDocument malformed;
+    malformed["alerts"] = "not-an-object";
+    TEST_ASSERT_NOT_EQUAL(ConfigError::None,
+                          configFromJson(malformed.as<JsonVariantConst>(), c));
+}
+
 void test_validation_rejects_stale_range_and_location_shape() {
     AppConfig c;
     c.apiStaleAfterSec = 10;
@@ -184,6 +197,7 @@ int main() {
     RUN_TEST(test_json_rejects_too_many_locations_without_truncating);
     RUN_TEST(test_json_rejects_invalid_and_duplicate_locations);
     RUN_TEST(test_json_rejects_overflow_and_overlong_name);
+    RUN_TEST(test_json_rejects_future_schema_and_malformed_sections);
     RUN_TEST(test_validation_rejects_stale_range_and_location_shape);
     RUN_TEST(test_fingerprint_stability);
     RUN_TEST(test_startup_policy_cooldown);

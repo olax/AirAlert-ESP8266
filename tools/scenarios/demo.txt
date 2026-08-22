@@ -2,8 +2,8 @@
 sleep 20
 start air_raid 14
 sleep 60
-start chemical 123 14
+start chemical 10123 14
 sleep 60
-stop chemical 123
+stop chemical 10123
 sleep 30
 stop air_raid 14

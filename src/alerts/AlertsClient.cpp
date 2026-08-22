@@ -1,31 +1,50 @@
 #include "AlertsClient.h"
 #include "AlertsCa.h"
-
-// SPEC 133: production hostname is immutable; a mock endpoint exists only as
-// a compile-time flag in dev builds and is unreachable from any UI.
-#ifdef AIRALERT_MOCK_URL
-static const char kAlertsUrl[] = AIRALERT_MOCK_URL;
-#else
-static const char kAlertsUrl[] = "https://api.alerts.in.ua/v1/alerts/active.json";
+#ifdef AIRALERT_DEV
+#include "CaBundle.h"
 #endif
+
+// SPEC 133: production hostname is immutable. Dev builds may point at a local
+// emulator at runtime (serial `setmock`), never via any web UI.
+static const char kAlertsUrl[] = "https://api.alerts.in.ua/v1/alerts/active.json";
 
 AlertsClient::Result AlertsClient::poll(airalert::SnapshotBuilder& builder) {
     Result r;
 
-#ifdef AIRALERT_MOCK_URL
-    WiFiClient client; // plain HTTP to the local mock only
-#else
-    BearSSL::WiFiClientSecure client;
-    static BearSSL::X509List ca(ALERTS_CA_PEM);
-    client.setTrustAnchors(&ca);
-    client.setBufferSizes(4096, 512); // SPEC 113; RX must fit TLS records
-    client.setSession(&session_);
+    const char* url = kAlertsUrl;
+    BearSSL::WiFiClientSecure secureClient;
+    WiFiClient* client = &secureClient;
+#ifdef AIRALERT_DEV
+    bool devMockTls = false;
+    WiFiClient plainClient;
+    if (mockUrl_.length()) {
+        url = mockUrl_.c_str();
+        if (mockUrl_.startsWith("https")) {
+            devMockTls = true;
+        } else {
+            client = &plainClient;
+        }
+    }
 #endif
+    if (client == &secureClient) {
+#ifdef AIRALERT_DEV
+        if (devMockTls) {
+            static BearSSL::X509List devCas(CA_BUNDLE_PEM);
+            secureClient.setTrustAnchors(&devCas);
+        } else
+#endif
+        {
+            static BearSSL::X509List ca(ALERTS_CA_PEM);
+            secureClient.setTrustAnchors(&ca);
+            secureClient.setSession(&session_);
+        }
+        secureClient.setBufferSizes(4096, 512); // SPEC 113; RX must fit TLS records
+    }
 
     HTTPClient http;
     http.setTimeout(10000);
     http.useHTTP10(true); // no chunked encoding -> ArduinoJson can read the stream
-    if (!http.begin(client, kAlertsUrl)) { r.kind = Result::Kind::NetError; return r; }
+    if (!http.begin(*client, url)) { r.kind = Result::Kind::NetError; return r; }
 
     http.addHeader("Authorization", "Bearer " + token_);
     if (lastModified_.length()) http.addHeader("If-Modified-Since", lastModified_);
