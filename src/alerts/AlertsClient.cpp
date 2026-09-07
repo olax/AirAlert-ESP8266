@@ -120,7 +120,14 @@ AlertsClient::Result AlertsClient::poll(airalert::SnapshotBuilder& builder) {
         case HTTP_CODE_OK: {
             const String responseLastModified = http.header("Last-Modified");
             r.kind = parseBody(http.getStream(), builder, r);
-            if (r.kind != Result::Kind::Ok) break; // builder NOT committed (Invariant 6)
+            if (r.kind != Result::Kind::Ok) {
+                // The builder holds a half-streamed snapshot and we no longer
+                // own a validated one: a later 304 must not resurrect it
+                // (Invariant 6). Drop the validator too, so the next poll
+                // asks for a full body.
+                invalidateCache();
+                break;
+            }
             lastModified_ = responseLastModified;
             cache_.commitValidSnapshot();
             break;

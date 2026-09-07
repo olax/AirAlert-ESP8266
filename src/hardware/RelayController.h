@@ -20,6 +20,11 @@ public:
         writeOff();
         pinMode(pin_, OUTPUT);
         writeOff();
+        // begin() re-runs on every config save. The pin is physically OFF now,
+        // so the cached state must say so too: a stale on_=true would make the
+        // next apply(true) a no-op - relay dead AND the safety deadline never
+        // armed - for the rest of a playing pattern.
+        on_ = false;
     }
 
     // Feed the desired state every loop; the guard decides what the GPIO gets.

@@ -2,6 +2,7 @@
 // non-blocking tick pipeline per SPEC 116.
 #include <Arduino.h>
 #include <ESP8266WiFi.h>
+#include <Ticker.h>
 #include <LittleFS.h>
 #include <ArduinoJson.h>
 #include <time.h>
@@ -98,18 +99,31 @@ static void muteNow(bool longPress) {
     eventLog.log(LogEvent::Mute, longPress ? "scope=snooze" : "scope=until_clear");
 }
 
+// Invariant 8 stops everything for OTA - but nothing guaranteed OTA ever ends:
+// ESP8266WebServer spins in _uploadReadByte() while a half-open client keeps the
+// socket open and sends nothing, so loop() never runs again and the siren stays
+// dead with no watchdog (yield() keeps feeding it). A SYS-context deadline runs
+// even while loop() is blocked, exactly like the relay safety timer. Rebooting
+// is safe: an unfinished Update only touched the staging area, never the
+// running sketch, so the device comes back on the old firmware and sirens again.
+static constexpr uint32_t kOtaDeadlineMs = 300000; // 5 min
+static Ticker otaWatchdog;
+
 static void prepareOta() { // Invariant 8
     otaInProgress = true;
     notify.stopAll();
     relay.forceOff();
+    otaWatchdog.once_ms(kOtaDeadlineMs, [] { ESP.restart(); });
 }
 
 static void finishFailedOta() {
+    otaWatchdog.detach();
     relay.forceOff();
     otaInProgress = false;
 }
 
 static void refreshLocations() {
+    activeView = ActiveLocationView{}; // drop rows for locations no longer selected
     relay.forceOff();
     notify.resetAlertState();
     engine.reset();

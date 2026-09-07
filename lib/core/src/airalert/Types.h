@@ -18,6 +18,9 @@ enum class AlertType : uint8_t {
     Unknown
 };
 constexpr uint8_t kAlertTypeCount = 7; // including Unknown
+// NotificationEngine::activeMask_ and MuteState::mutedTypesMask_ are uint8_t
+// bitmasks indexed by AlertType: an 9th type would silently alias bit 0.
+static_assert(kAlertTypeCount <= 8, "AlertType bitmasks are uint8_t");
 
 // SPEC 12
 enum class LocationType : uint8_t { Oblast, Raion, Hromada, City, Unknown };

@@ -28,7 +28,11 @@ public:
         digitalWrite(alertPin_, alertAh_ ? LOW : HIGH);
         pinMode(alertPin_, OUTPUT);
         digitalWrite(alertPin_, alertAh_ ? LOW : HIGH);
+        alertCur_ = false; // matches the pin we just drove; begin() re-runs on
+                           // every config save and a stale cache would make the
+                           // next writeAlert() a no-op (lamp dark during an alert)
         pinMode(sysPin_, OUTPUT);
+        sysCur_ = true;    // force the write below through the cache
         writeSys(false);
     }
 

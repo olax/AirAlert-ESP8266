@@ -399,13 +399,16 @@ void WebUi::handleSystem() { // SPEC 114, 126
     }
     d["ip"] = WiFi.localIP().toString();
     d["rssi"] = WiFi.RSSI();
-    d["catalogue"] = "v1 (155 locations)";
+    d["catalogue"] = "ukrainealarm /api/v3/regions"; // no count: it would rot
     sendJson(d);
 }
 
 void WebUi::handleScan() {
-    // unauthenticated by design: needed on the open first-run portal, exposes
-    // only nearby SSIDs (visible to anyone with a radio anyway)
+    // Open only on the first-run portal, where no session can exist yet. On a
+    // configured device this must require auth: scanNetworks() blocks the loop
+    // for ~2 s, so an unauthenticated LAN client could stall polling and the
+    // siren patterns by hammering it.
+    if (d_.wifi->state() != WifiService::State::Provisioning && !authed()) return;
     const int n = WiFi.scanNetworks();
     JsonDocument d;
     JsonArray arr = d["networks"].to<JsonArray>();

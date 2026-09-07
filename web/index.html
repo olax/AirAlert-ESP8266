@@ -178,7 +178,7 @@ button.btn.warn{background:#a35b18}button.btn.bad{background:#a33030}button.btn.
 <script>
 const TABS={dash:"Стан",loc:"Локації",sig:"Сигнали",relay:"Реле",api:"API",ota:"OTA",log:"Журнал",sys:"Система"};
 const TYPES={air_raid:"Повітряна тривога (червона)",artillery_shelling:"Артобстріл",urban_fights:"Вуличні бої",chemical:"Хімічна загроза",nuclear:"Ядерна загроза",air_raid_yellow:"Повітряна тривога (жовта — дрони)",unknown:"Інша загроза"};
-let cfg=null,cat=null,selected=[],tok=sessionStorage.getItem("t");
+let cfg=null,cat=null,selected=[],tok=sessionStorage.getItem("t"),refreshTimer=null;
 const $=id=>document.getElementById(id);
 const hdrs=()=>({"Content-Type":"application/json","X-Auth":tok||""});
 async function req(m,u,b){const r=await fetch(u,{method:m,headers:hdrs(),body:b?JSON.stringify(b):undefined});
@@ -296,7 +296,8 @@ function showTab(k){document.querySelectorAll("main>section").forEach(s=>s.class
  document.querySelectorAll("nav button").forEach(b=>b.classList.toggle("on",b.dataset.k===k));
  if(k==="log")loadLog();if(k==="sys")loadSys();if(k==="api")loadTok()}
 $("tabs").innerHTML=Object.entries(TABS).map(([k,n])=>`<button data-k="${k}" onclick="showTab('${k}')">${n}</button>`).join("");
-async function init(){$("login").classList.add("hide");await loadCfg();await loadCat();refresh();setInterval(refresh,5000);showTab("dash")}
+async function init(){$("login").classList.add("hide");await loadCfg();await loadCat();refresh();
+ if(!refreshTimer)refreshTimer=setInterval(refresh,5000);showTab("dash")}
 (async()=>{if(!tok){$("login").classList.remove("hide");return}
  try{await get("/api/v1/status");init()}catch(e){}})();
 </script>
