@@ -84,6 +84,8 @@ static bool wasOnline = false;
 static bool otaInProgress = false;
 static int lastApiHttpCode = 0;
 static String lastApiError;
+static uint8_t auth401Streak = 0; // consecutive 401s, see doPoll()
+static constexpr uint8_t kBadKeyStreak = 15; // P(15 rate-limit 401s in a row) < 1e-4 at any cadence
 
 static bool apiReady() {
     return wifi.online() && ntpSynced && client.hasToken() && appCfg.selectedCount > 0;
@@ -132,6 +134,12 @@ static void applyConfig() {
     health.setConfig({appCfg.apiStaleAfterSec * 1000u});
     builder.setSelected(appCfg.selected, appCfg.selectedCount);
     builder.setCatalog(&catalog);
+    for (uint8_t i = 0; i < appCfg.selectedCount; ++i) { // catalogue regenerated -> stale uids
+        Location known;
+        if (!catalog.findByUid(appCfg.selected[i].uid, known))
+            Serial.printf("[CFG] location uid=%u not in catalogue - re-select it in the Web UI\n",
+                          appCfg.selected[i].uid);
+    }
     led.begin(pins::BUILTIN_LED, true, pins::ALERT_OUT,
               appCfg.alertIndicatorActiveHigh, appCfg.alertIndicatorSteady);
 }
@@ -172,6 +180,15 @@ static void applyAndNotify(const AlertEngine::Snapshot& snap, bool simulated) {
         if (ev[i].kind == AlertEvent::Started && !appCfg.partialSiren &&
             engine.status(ev[i].type).coverage == Coverage::Partial)
             mode = NotificationEngine::StartupMode::Silent;
+        // One physical air raid, two colours: a colour ending while the other
+        // colour is still active is a level change, not an all-clear.
+        if (ev[i].kind == AlertEvent::Ended) {
+            const AlertType other =
+                ev[i].type == AlertType::AirRaid ? AlertType::AirRaidYellow
+                : ev[i].type == AlertType::AirRaidYellow ? AlertType::AirRaid : AlertType::Unknown;
+            if (other != AlertType::Unknown && engine.status(other).state == AlertState::Active)
+                mode = NotificationEngine::StartupMode::Silent;
+        }
         notify.onEngineEvent(ev[i], mode, millis());
         switch (ev[i].kind) {
             case AlertEvent::Started:
@@ -205,6 +222,7 @@ static void doPoll() {
     BackoffPolicy::Outcome oc;
     switch (res.kind) {
         case Kind::Ok:
+            auth401Streak = 0;
             if (!health.online()) eventLog.log(LogEvent::ApiOnline);
             health.onContact(millis());
             oc = BackoffPolicy::Outcome::Success;
@@ -215,6 +233,7 @@ static void doPoll() {
                           (unsigned long)latency, ESP.getFreeHeap());
             break;
         case Kind::NotModified:
+            auth401Streak = 0;
             if (!health.online()) eventLog.log(LogEvent::ApiOnline);
             health.onContact(millis());
             oc = BackoffPolicy::Outcome::NotModified;
@@ -224,10 +243,22 @@ static void doPoll() {
                           (unsigned long)latency, ESP.getFreeHeap());
             break;
         case Kind::AuthError:
-            lastApiError = "unauthorized";
-            health.onFailure();
-            oc = BackoffPolicy::Outcome::AuthError;
-            eventLog.log(LogEvent::Api401);
+            // ukrainealarm.com rate-limits with a bare 401 identical to a bad
+            // key: ~3 accepted requests per key per minute, the rest 401 - about
+            // a third of polls at 20 s (docs/RESEARCH.md). So one 401 is "poll
+            // again at the normal cadence": no health failure, no ladder. Only
+            // a long streak means the key really is bad; then the SPEC 163
+            // 5-min backoff applies, journaled once per streak.
+            if (auth401Streak < 255) ++auth401Streak;
+            if (auth401Streak < kBadKeyStreak) {
+                lastApiError = "rate_limited";
+                oc = BackoffPolicy::Outcome::Success;
+            } else {
+                lastApiError = "unauthorized";
+                health.onFailure();
+                oc = BackoffPolicy::Outcome::AuthError;
+                if (auth401Streak == kBadKeyStreak) eventLog.log(LogEvent::Api401);
+            }
             break;
         case Kind::Forbidden:
             lastApiError = "forbidden";
@@ -446,6 +477,7 @@ void setup() {
                [] { applyConfig(); },
                [](const String& t) {
                    client.begin(t);
+                   auth401Streak = 0;     // new key: judge it afresh
                    nextPollAt = millis(); // poll with the new token immediately
                },
                [] { refreshLocations(); },

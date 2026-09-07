@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
-"""alerts.in.ua emulator for AirAlert dynamic testing (supersedes the static
-mock, SPEC 143). Stdlib only - runs on Windows `py -3` or Linux python3.
+"""ukrainealarm.com emulator for AirAlert dynamic testing (supersedes the
+static mock, SPEC 143). Stdlib only - runs on Windows `py -3` or Linux python3.
 
   python3 tools/alerts_emulator.py [--port 8787] [--log requests.jsonl]
                                    [--scenario tools/scenarios/demo.txt]
                                    [--require-token]
 
 Data endpoint (what the firmware polls):
-  GET /v1/alerts/active.json   - real API shape, Last-Modified + 304
+  GET /api/v3/alerts           - real API shape, Last-Modified + 304
 
 Control (curl or browser, also available as stdin REPL):
-  GET /ctl?cmd=start+air_raid+14      - start an alert (oblast 14)
-  GET /ctl?cmd=start+chemical+10123+14 - hromada inside oblast 14 (uid >= 10000!)
+  GET /ctl?cmd=start+air_raid+14        - red air raid on oblast 14
+  GET /ctl?cmd=start+air_raid+75+yellow - yellow (drone) level on raion 75
+  GET /ctl?cmd=start+chemical+703       - hromada 703 (Ірпінська, raion 75)
   GET /ctl?cmd=stop+air_raid+14
   GET /ctl?cmd=clear
   GET /ctl?cmd=mode+429               - ok|401|403|429|500|invalid|slow
@@ -32,12 +33,14 @@ from urllib.parse import parse_qs, urlparse
 
 args = argparse.Namespace(log="", require_token=False)
 
-TYPES = {"air_raid", "artillery_shelling", "urban_fights", "chemical", "nuclear"}
-# NB: hromada UIDs are NOT in the official catalogue, so test hromadas must use
-# uids ABOVE the official range (10000+). A low fake uid (e.g. 123) collides
-# with a real raion in another oblast and the firmware will rightly not match.
+# command vocabulary (matches firmware/config names) -> API `type`
+TYPES = {"air_raid": "AIR", "artillery_shelling": "ARTILLERY",
+         "urban_fights": "URBAN_FIGHTS", "chemical": "CHEMICAL", "nuclear": "NUCLEAR"}
+LEVELS = {"red": "Red", "yellow": "Yellow"}
+# uids are ukrainealarm regionIds; the firmware resolves hierarchy from its
+# own table, so use REAL ids (fake ones never match anything)
 LOCATION_NAMES = {14: "Київська область", 31: "м. Київ", 16: "Луганська область",
-                  67: "Бучанський район", 10123: "Ірпінська громада (тест)"}
+                  75: "Бучанський район", 703: "Ірпінська територіальна громада"}
 
 state_lock = threading.Lock()
 log_lock = threading.Lock()
@@ -50,7 +53,32 @@ stats = {"requests": 0, "200": 0, "304": 0, "errors": 0}
 
 
 def now_iso(ts=None):
-    return time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(ts or time.time()))
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts or time.time()))
+
+
+def region_type(uid):
+    return "State" if uid < 32 or uid in (564, 1293, 9999) else \
+        ("District" if uid < 200 else "Community")
+
+
+def response_body():
+    # group by region like the real API; levels of one (type, uid) merge
+    regions = {}
+    for (typ, uid, level), a in alerts.items():
+        r = regions.setdefault(uid, {
+            "regionId": str(uid), "regionType": region_type(uid),
+            "regionName": LOCATION_NAMES.get(uid, f"Регіон {uid}"),
+            "regionEngName": "", "lastUpdate": a["createdAt"], "activeAlerts": []})
+        for act in r["activeAlerts"]:
+            if act["type"] == TYPES[typ]:
+                act["activeAlertLevels"].append(a)
+                break
+        else:
+            r["activeAlerts"].append({
+                "regionId": str(uid), "regionType": region_type(uid),
+                "type": TYPES[typ], "lastUpdate": a["createdAt"],
+                "activeAlertLevels": [a]})
+    return list(regions.values())
 
 
 def touch():
@@ -78,37 +106,31 @@ def do_cmd(line: str) -> str:
             typ = p[1]
             try:
                 uid = int(p[2])
-                oblast = int(p[3]) if len(p) > 3 else uid
             except ValueError:
-                return "uid and oblast uid must be integers"
+                return "uid must be an integer"
             if typ not in TYPES:
                 return f"unknown type {typ} (known: {', '.join(sorted(TYPES))})"
-            ltype = "oblast" if uid == oblast and uid != 31 else \
-                    ("city" if uid in (30, 31) else "hromada")
-            next_id[0] += 1
-            alerts[(typ, uid)] = {
-                "id": next_id[0],
-                "location_title": LOCATION_NAMES.get(uid, f"Локація {uid}"),
-                "location_type": ltype,
-                "started_at": now_iso(),
-                "finished_at": None,
-                "updated_at": now_iso(),
-                "alert_type": typ,
-                "location_uid": str(uid),
-                "location_oblast": LOCATION_NAMES.get(oblast, f"Область {oblast}"),
-                "location_oblast_uid": str(oblast),
-                "location_raion": None,
-                "notes": "емулятор",
-                "calculated": False,
+            level = p[3] if len(p) > 3 else "red"
+            if level not in LEVELS:
+                return "levels: red yellow"
+            alerts[(typ, uid, level)] = {
+                "alertLevel": LEVELS[level],
+                "reason": "емулятор",
+                "createdAt": now_iso(),
             }
             touch()
-            return f"started {typ} @ {uid}"
+            return f"started {typ} {level} @ {uid}"
         if cmd == "stop" and len(p) >= 3:
             try:
                 uid = int(p[2])
             except ValueError:
                 return "uid must be an integer"
-            if alerts.pop((p[1], uid), None):
+            level = p[3] if len(p) > 3 else None
+            keys = [k for k in alerts if k[0] == p[1] and k[1] == uid
+                    and (level is None or k[2] == level)]
+            for k in keys:
+                del alerts[k]
+            if keys:
                 touch()
                 return f"stopped {p[1]} @ {p[2]}"
             return "no such alert"
@@ -122,7 +144,7 @@ def do_cmd(line: str) -> str:
             mode[0] = p[1]
             return f"mode={p[1]}"
         if cmd == "status":
-            act = ", ".join(f"{t}@{u}" for t, u in alerts) or "немає"
+            act = ", ".join(f"{t}/{lv}@{u}" for t, u, lv in alerts) or "немає"
             with log_lock:
                 counters = stats.copy()
             return (f"alerts: {act} | mode={mode[0]} | requests={counters['requests']} "
@@ -148,7 +170,7 @@ def log_request(rec):
 
 
 def token_marker(authorization: str) -> str:
-    return "present" if authorization.startswith("Bearer ") else ""
+    return "present" if authorization else ""
 
 
 class H(BaseHTTPRequestHandler):
@@ -165,7 +187,7 @@ class H(BaseHTTPRequestHandler):
 
     def do_GET(self):
         u = urlparse(self.path)
-        if u.path == "/v1/alerts/active.json":
+        if u.path == "/api/v3/alerts":
             return self.serve_alerts()
         if u.path == "/ctl":
             cmd = (parse_qs(u.query).get("cmd") or [""])[0]
@@ -184,11 +206,11 @@ class H(BaseHTTPRequestHandler):
             stats["requests"] += 1
         auth = self.headers.get("Authorization", "")
         token = token_marker(auth)
-        rec = {"path": "/v1/alerts/active.json", "src": self.client_address[0], "token": token,
+        rec = {"path": "/api/v3/alerts", "src": self.client_address[0], "token": token,
                "ims": "If-Modified-Since" in self.headers, "mode": mode[0]}
 
         m = mode[0]
-        if args.require_token and not auth.startswith("Bearer "):
+        if args.require_token and (not auth or auth.startswith("Bearer ")):  # raw key only, like production
             m = "401"
         if m == "slow":
             time.sleep(15)  # longer than the firmware's 10 s timeout
@@ -211,12 +233,11 @@ class H(BaseHTTPRequestHandler):
                 stats["errors"] += 1
             rec.update(code=200, note="INVALID JSON")
             log_request(rec)
-            return self._send(200, b'{"alerts":[{"id":broken')
+            return self._send(200, b'[{"regionId":broken')
 
         with state_lock:
             lm = email.utils.formatdate(last_modified[0], usegmt=True)
-            body = json.dumps({"alerts": list(alerts.values())},
-                              ensure_ascii=False).encode()
+            body = json.dumps(response_body(), ensure_ascii=False).encode()
         if self.headers.get("If-Modified-Since") == lm:
             with log_lock:
                 stats["304"] += 1
@@ -256,7 +277,7 @@ def main():
     ap.add_argument("--log", default="", help="append request log (JSONL) to this file")
     ap.add_argument("--scenario", default="", help="run commands from file on start")
     ap.add_argument("--require-token", action="store_true",
-                    help="respond 401 unless Authorization: Bearer is present")
+                    help="respond 401 unless a raw API key is present (Bearer scheme = 401, as production)")
     args = ap.parse_args()
 
     # Windows consoles default to cp1252 and choke on Ukrainian text.

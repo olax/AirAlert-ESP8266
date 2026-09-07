@@ -12,13 +12,12 @@ Coverage LocationMatcher::match(const Location& selected, const Alert& alert) co
     if (alert.locationUid == selected.oblastUid) return Coverage::Full;
     if (selected.raionUid != 0 && alert.locationUid == selected.raionUid) return Coverage::Full;
 
-    // Enrich the alert with catalogue hierarchy: the API only carries oblast uid,
-    // the raion uid comes from our local catalogue (SPEC 13).
-    uint16_t alertOblast = alert.oblastUid;
-    uint16_t alertRaion = 0;
+    // The API carries no parent ids: the alert's oblast/raion come from our
+    // local catalogue only (SPEC 13). Unknown uid -> no child match.
+    uint16_t alertOblast = 0, alertRaion = 0;
     Location known;
     if (catalog_ && catalog_->findByUid(alert.locationUid, known)) {
-        if (known.oblastUid != 0) alertOblast = known.oblastUid;
+        alertOblast = known.oblastUid;
         alertRaion = known.raionUid;
     }
 

@@ -130,9 +130,9 @@ button.btn.warn{background:#a35b18}button.btn.bad{background:#a33030}button.btn.
 
 <section id="t-api" class="hide">
 <div class="card">
-<h2>API alerts.in.ua</h2>
-<p>Токен: <b id="tokstate">…</b></p>
-<label>Новий API токен (write-only, не відображається)</label>
+<h2>API ukrainealarm.com</h2>
+<p>Ключ: <b id="tokstate">…</b></p>
+<label>Новий API ключ (write-only, не відображається; отримати: api.ukrainealarm.com)</label>
 <input id="newtok" type="password" autocomplete="off">
 <div style="margin-top:8px"><button class="btn" onclick="saveToken()">Зберегти токен</button></div>
 <label>Інтервал опитування, с (10–600)</label>
@@ -177,7 +177,7 @@ button.btn.warn{background:#a35b18}button.btn.bad{background:#a33030}button.btn.
 </main>
 <script>
 const TABS={dash:"Стан",loc:"Локації",sig:"Сигнали",relay:"Реле",api:"API",ota:"OTA",log:"Журнал",sys:"Система"};
-const TYPES={air_raid:"Повітряна тривога",artillery_shelling:"Артобстріл",urban_fights:"Вуличні бої",chemical:"Хімічна загроза",nuclear:"Ядерна загроза",unknown:"Інша загроза"};
+const TYPES={air_raid:"Повітряна тривога (червона)",artillery_shelling:"Артобстріл",urban_fights:"Вуличні бої",chemical:"Хімічна загроза",nuclear:"Ядерна загроза",air_raid_yellow:"Повітряна тривога (жовта — дрони)",unknown:"Інша загроза"};
 let cfg=null,cat=null,selected=[],tok=sessionStorage.getItem("t");
 const $=id=>document.getElementById(id);
 const hdrs=()=>({"Content-Type":"application/json","X-Auth":tok||""});
@@ -198,9 +198,9 @@ async function refresh(){try{const s=await get("/api/v1/status");
  if(s.alerts.muted)b.push(badge("🔇 Заглушено","warn"));if(s.relay.active)b.push(badge("РЕЛЕ УВІМК","bad"));
  if(s.relay.tripped)b.push(badge("Захист реле!","bad"));$("badges").innerHTML=b.join("");
  const ab=$("alertbox");
- if(!s.api.ever_synced){const why={locations:"Оберіть щонайменше одну локацію",wifi:"Очікування підключення Wi-Fi…",token:"Вкажіть API токен",time:"Синхронізація часу…",unauthorized:"API відхилив токен (401)",forbidden:"API заборонив доступ (403)",rate_limited:"API тимчасово обмежив запити (429)",parse_error:"API повернув некоректні дані",network_error:"Немає зв’язку з API",http_error:"Помилка відповіді API",api:"Очікування першої відповіді API…"};
+ if(!s.api.ever_synced){const why={locations:"Оберіть щонайменше одну локацію",wifi:"Очікування підключення Wi-Fi…",token:"Вкажіть API ключ ukrainealarm.com",time:"Синхронізація часу…",unauthorized:"API відхилив токен (401)",forbidden:"API заборонив доступ (403)",rate_limited:"API тимчасово обмежив запити",parse_error:"API повернув некоректні дані",network_error:"Немає зв’язку з API",http_error:"Помилка відповіді API",api:"Очікування першої відповіді API…"};
   ab.className="big unknown";ab.textContent=why[s.api.waiting_reason]||"Очікування першої синхронізації…"}
- else if(s.alerts.active){ab.className="big alert";ab.textContent="🔴 "+(s.alerts.types.map(t=>TYPES[t.type]||t.type).join(" + "))}
+ else if(s.alerts.active){ab.className="big alert";ab.textContent=(s.alerts.types.every(t=>t.type==="air_raid_yellow")?"🟡 ":"🔴 ")+(s.alerts.types.map(t=>TYPES[t.type]||t.type).join(" + "))}
  else{ab.className="big clear";ab.textContent="Тривог немає"}
  const sb=$("stalebox");
  if(s.api.stale&&s.api.ever_synced){sb.classList.remove("hide");
@@ -260,11 +260,11 @@ function renderLocs(){const q=($("locsearch").value||"").toLowerCase();
  $("loclist").innerHTML=cat.filter(l=>!q||l.name.toLowerCase().includes(q)).map(l=>
   `<div class="loc ${l.type==="raion"?"child":""}"><input type="checkbox" ${selected.includes(l.uid)?"checked":""} onchange="togLoc(${l.uid},this.checked)"><span>${l.name}</span></div>`).join("")}
 function togLoc(u,on){if(on&&!selected.includes(u))selected.push(u);if(!on)selected=selected.filter(x=>x!==u);$("selcount").textContent=selected.length}
-async function saveLocs(){try{const locs=selected.map(u=>{const l=cat.find(x=>x.uid===u);
+async function saveLocs(){try{const locs=selected.filter(u=>cat.some(x=>x.uid===u)).map(u=>{const l=cat.find(x=>x.uid===u);
   return {uid:u,type:l.type,oblast_uid:l.oblast_uid||0,raion_uid:0}});
  await put("/api/v1/locations",{locations:locs});alert("Збережено");loadCfg()}catch(e){alert("Помилка: "+e.message)}}
 async function saveToken(){const t=$("newtok").value.trim();if(!t)return;
- try{await put("/api/v1/secrets/api-token",{token:t});$("newtok").value="";alert("Токен збережено");loadTok()}catch(e){alert("Помилка: "+e.message)}}
+ try{await put("/api/v1/secrets/api-token",{token:t});$("newtok").value="";alert("Ключ збережено");loadTok()}catch(e){alert("Помилка: "+e.message)}}
 async function loadTok(){try{const s=await get("/api/v1/status");$("tokstate").textContent=s.api.token_present?"налаштовано":"ВІДСУТНІЙ"}catch(e){}}
 async function testRelay(){if(!confirm("Фізично увімкнути реле на "+$("r_test").value+" мс?"))return;
  try{await post("/api/v1/test/relay")}catch(e){alert("Помилка: "+e.message)}}

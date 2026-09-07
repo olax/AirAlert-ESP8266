@@ -35,47 +35,46 @@ static Location OBLAST_KYIVSKA{14, LocationType::Oblast, 0, 0};
 static Location RAION_BUCHA{67, LocationType::Raion, 14, 0};
 static Location CITY_KYIV{31, LocationType::City, 0, 0};
 
-static Alert mkAlert(uint16_t uid, uint16_t oblastUid = 0) {
-    Alert a; a.id = 1; a.type = AlertType::AirRaid;
-    a.locationUid = uid; a.oblastUid = oblastUid;
+static Alert mkAlert(uint16_t uid) {
+    Alert a; a.type = AlertType::AirRaid; a.locationUid = uid;
     return a;
 }
 
 void test_exact_uid() {
-    TEST_ASSERT_EQUAL(Coverage::Full, m.match(HROMADA_IRPIN, mkAlert(123, 14)));
+    TEST_ASSERT_EQUAL(Coverage::Full, m.match(HROMADA_IRPIN, mkAlert(123)));
 }
 void test_selected_hromada_oblast_alert() { // SPEC 17
     TEST_ASSERT_EQUAL(Coverage::Full, m.match(HROMADA_IRPIN, mkAlert(14)));
 }
 void test_selected_hromada_raion_alert() { // SPEC 17
-    TEST_ASSERT_EQUAL(Coverage::Full, m.match(HROMADA_IRPIN, mkAlert(67, 14)));
+    TEST_ASSERT_EQUAL(Coverage::Full, m.match(HROMADA_IRPIN, mkAlert(67)));
 }
 void test_selected_oblast_hromada_alert() { // SPEC 18
-    TEST_ASSERT_EQUAL(Coverage::Partial, m.match(OBLAST_KYIVSKA, mkAlert(123, 14)));
+    TEST_ASSERT_EQUAL(Coverage::Partial, m.match(OBLAST_KYIVSKA, mkAlert(123)));
 }
 void test_selected_raion_child_hromada() { // raion uid known only via catalogue
-    TEST_ASSERT_EQUAL(Coverage::Partial, m.match(RAION_BUCHA, mkAlert(123, 14)));
+    TEST_ASSERT_EQUAL(Coverage::Partial, m.match(RAION_BUCHA, mkAlert(123)));
 }
 void test_different_oblast() {
-    TEST_ASSERT_EQUAL(Coverage::None, m.match(HROMADA_IRPIN, mkAlert(300, 15)));
+    TEST_ASSERT_EQUAL(Coverage::None, m.match(HROMADA_IRPIN, mkAlert(300)));
     TEST_ASSERT_EQUAL(Coverage::None, m.match(OBLAST_KYIVSKA, mkAlert(15)));
 }
 void test_sibling_hromada_no_match() {
-    TEST_ASSERT_EQUAL(Coverage::None, m.match(HROMADA_IRPIN, mkAlert(200, 14)));
+    TEST_ASSERT_EQUAL(Coverage::None, m.match(HROMADA_IRPIN, mkAlert(200)));
 }
 void test_city_special_status() {
     TEST_ASSERT_EQUAL(Coverage::Full, m.match(CITY_KYIV, mkAlert(31)));
     TEST_ASSERT_EQUAL(Coverage::None, m.match(CITY_KYIV, mkAlert(14)));
 }
-void test_unknown_uid_falls_back_to_api_oblast() { // SPEC 135 "unknown UID"
-    // uid 999 is not in the catalogue, but API says it is in oblast 14
-    TEST_ASSERT_EQUAL(Coverage::Partial, m.match(OBLAST_KYIVSKA, mkAlert(999, 14)));
-    TEST_ASSERT_EQUAL(Coverage::None, m.match(HROMADA_IRPIN, mkAlert(999, 14)));
+void test_unknown_uid_never_matches_as_child() { // SPEC 135 "unknown UID"
+    // uid 999 is not in the catalogue and the API carries no parent ids
+    TEST_ASSERT_EQUAL(Coverage::None, m.match(OBLAST_KYIVSKA, mkAlert(999)));
+    TEST_ASSERT_EQUAL(Coverage::None, m.match(HROMADA_IRPIN, mkAlert(999)));
 }
-void test_no_catalog_still_works() {
+void test_no_catalog_still_matches_parents() {
     LocationMatcher bare(nullptr);
     TEST_ASSERT_EQUAL(Coverage::Full, bare.match(HROMADA_IRPIN, mkAlert(14)));
-    TEST_ASSERT_EQUAL(Coverage::Partial, bare.match(OBLAST_KYIVSKA, mkAlert(999, 14)));
+    TEST_ASSERT_EQUAL(Coverage::None, bare.match(OBLAST_KYIVSKA, mkAlert(123)));
 }
 void test_zero_uids_never_match() {
     Location empty{};
@@ -93,8 +92,8 @@ int main() {
     RUN_TEST(test_different_oblast);
     RUN_TEST(test_sibling_hromada_no_match);
     RUN_TEST(test_city_special_status);
-    RUN_TEST(test_unknown_uid_falls_back_to_api_oblast);
-    RUN_TEST(test_no_catalog_still_works);
+    RUN_TEST(test_unknown_uid_never_matches_as_child);
+    RUN_TEST(test_no_catalog_still_matches_parents);
     RUN_TEST(test_zero_uids_never_match);
     return UNITY_END();
 }

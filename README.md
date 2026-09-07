@@ -1,7 +1,7 @@
 # AirAlert-ESP8266
 
 Автономний сигналізатор повітряних тривог на NodeMCU v3 (ESP8266):
-API alerts.in.ua → реле/сирена + LED-індикація + Web UI. Без Raspberry Pi,
+API ukrainealarm.com → реле/сирена + LED-індикація + Web UI. Без Raspberry Pi,
 Home Assistant, MQTT-брокера чи хмарного сервера.
 
 **Статус: 0.9 (pre-release).** Firmware-фази 0–9 завершені; commissioning
@@ -11,7 +11,8 @@ Home Assistant, MQTT-брокера чи хмарного сервера.
 
 ## Можливості
 
-- всі 5 типів загроз alerts.in.ua + невідомі (forward-compatible)
+- усі типи загроз ukrainealarm.com + невідомі (forward-compatible); жовтий
+  (дрони) і червоний (ракети) рівні повітряної тривоги — окремі профілі сигналів
 - кілька локацій одночасно, ієрархічний matching (область ⊃ район)
 - часткові тривоги з окремою політикою LED/сирени
 - state machine з підтвердженнями: старт швидкий (1), відбій обережний (2)
@@ -38,7 +39,7 @@ py -3 -m esptool --port COM3 --baud 921600 write-flash 0x0 \
 Перший запуск: пристрій підніме AP `AirAlert-XXXX` (випадковий пароль/ключ
 налаштування — у серіал-лозі, 115200), відкрийте http://192.168.4.1/ → введіть
 цей ключ, Wi-Fi, токен
-[alerts.in.ua](https://alerts.in.ua/api-request), пароль адміністратора.
+[ukrainealarm.com](https://api.ukrainealarm.com/swagger/index.html), пароль адміністратора.
 
 ## ⚠ Безпека
 
@@ -59,5 +60,5 @@ py -3 -m esptool --port COM3 --baud 921600 write-flash 0x0 \
 
 ## Джерело даних
 
-[alerts.in.ua](https://alerts.in.ua) — дотримуйтесь лімітів API
+[ukrainealarm.com](https://www.ukrainealarm.com) — дотримуйтесь лімітів API
 (вбудований мінімум 10 с між запитами). Ліцензія: MIT.

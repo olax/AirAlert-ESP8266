@@ -19,7 +19,6 @@ public:
         if (airalert::configFromJson(d.as<JsonVariantConst>(), next) !=
             airalert::ConfigError::None)
             return false;
-        next.schemaVersion = airalert::kConfigSchema; // migrated on load (SPEC 90)
         c = next;
         return true;
     }

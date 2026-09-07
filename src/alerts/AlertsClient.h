@@ -1,5 +1,5 @@
 #pragma once
-// HTTP/TLS transport for alerts.in.ua (SPEC 174: transport only, no policy).
+// HTTP/TLS transport for api.ukrainealarm.com (SPEC 174: transport only, no policy).
 #include <Arduino.h>
 #include <ESP8266HTTPClient.h>
 #include <WiFiClientSecureBearSSL.h>
@@ -43,7 +43,7 @@ public:
     bool mocked() const { return mockUrl_.length() > 0; }
 #endif
 
-    // One poll: GET active.json, stream-parse into the builder.
+    // One poll: GET /api/v3/alerts, stream-parse into the builder.
     // The builder is only committed by the caller on Kind::Ok (SPEC 168).
     Result poll(airalert::SnapshotBuilder& builder);
 

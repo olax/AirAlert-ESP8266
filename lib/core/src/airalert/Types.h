@@ -4,16 +4,20 @@
 
 namespace airalert {
 
-// SPEC 11
+// SPEC 11 + ukrainealarm.com alert levels. The graded scheme (yellow = drone
+// threat, red = missile threat) exists only for AIR, so the yellow level is
+// modeled as its own type: own profile, own engine slot, own events.
+// ponytail: add a level axis if the API ever grades the other types.
 enum class AlertType : uint8_t {
-    AirRaid,
+    AirRaid,            // AIR, red level or ungraded
     ArtilleryShelling,
     UrbanFights,
     Chemical,
     Nuclear,
+    AirRaidYellow,      // AIR, yellow level
     Unknown
 };
-constexpr uint8_t kAlertTypeCount = 6; // including Unknown
+constexpr uint8_t kAlertTypeCount = 7; // including Unknown
 
 // SPEC 12
 enum class LocationType : uint8_t { Oblast, Raion, Hromada, City, Unknown };
@@ -31,6 +35,22 @@ inline AlertType alertTypeFromString(const char* s) {
     if (!strcmp(s, "urban_fights")) return AlertType::UrbanFights;
     if (!strcmp(s, "chemical")) return AlertType::Chemical;
     if (!strcmp(s, "nuclear")) return AlertType::Nuclear;
+    if (!strcmp(s, "air_raid_yellow")) return AlertType::AirRaidYellow;
+    return AlertType::Unknown;
+}
+
+// ukrainealarm.com /api/v3 `type` + `alertLevel` -> AlertType. Anything that
+// is not explicitly "Yellow" (Red, missing, a future level) counts as red:
+// for a siren an unknown level must err on the loud side.
+inline AlertType alertTypeFromApi(const char* type, const char* level) {
+    if (!type) return AlertType::Unknown;
+    if (!strcmp(type, "AIR"))
+        return (level && !strcmp(level, "Yellow")) ? AlertType::AirRaidYellow
+                                                    : AlertType::AirRaid;
+    if (!strcmp(type, "ARTILLERY")) return AlertType::ArtilleryShelling;
+    if (!strcmp(type, "URBAN_FIGHTS")) return AlertType::UrbanFights;
+    if (!strcmp(type, "CHEMICAL")) return AlertType::Chemical;
+    if (!strcmp(type, "NUCLEAR")) return AlertType::Nuclear;
     return AlertType::Unknown;
 }
 
@@ -41,6 +61,7 @@ inline const char* alertTypeToString(AlertType t) {
         case AlertType::UrbanFights: return "urban_fights";
         case AlertType::Chemical: return "chemical";
         case AlertType::Nuclear: return "nuclear";
+        case AlertType::AirRaidYellow: return "air_raid_yellow";
         default: return "unknown";
     }
 }

@@ -205,6 +205,23 @@ void test_debouncer_long_press() { // SPEC 54: hold 2 s
     TEST_ASSERT_FALSE(d.wasShortPress());
 }
 
+// Air-raid colour change: END of one colour while the other stays active is
+// voiced Silent by main.cpp - state must still clear, no END pattern.
+void test_silent_end_is_bookkeeping_only() {
+    NotificationEngine n;
+    n.onEngineEvent({AlertEvent::Started, AlertType::AirRaid},
+                    NotificationEngine::StartupMode::Silent, 0);
+    n.onEngineEvent({AlertEvent::Ended, AlertType::AirRaid},
+                    NotificationEngine::StartupMode::Silent, 1000);
+    TEST_ASSERT_EQUAL(0, n.queued());
+    TEST_ASSERT_FALSE(n.tick(2000));
+    n.onEngineEvent({AlertEvent::Started, AlertType::AirRaid},
+                    NotificationEngine::StartupMode::Silent, 3000);
+    n.onEngineEvent({AlertEvent::Ended, AlertType::AirRaid},
+                    NotificationEngine::StartupMode::Normal, 4000);
+    TEST_ASSERT_EQUAL(1, n.queued()); // Normal END still sounds
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_start_plays_start_pattern);
@@ -222,6 +239,7 @@ int main() {
     RUN_TEST(test_start_preempts_reminder);
     RUN_TEST(test_reminder_interval);
     RUN_TEST(test_disabled_profile_no_sound);
+    RUN_TEST(test_silent_end_is_bookkeeping_only);
     RUN_TEST(test_debouncer_press_release);
     RUN_TEST(test_debouncer_bounce_ignored);
     RUN_TEST(test_debouncer_long_press);

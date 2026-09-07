@@ -4,7 +4,7 @@
 
 ```mermaid
 flowchart TD
-    API[alerts.in.ua] -->|HTTPS + Bearer, 15s| Client[AlertsClient]
+    API[ukrainealarm.com] -->|HTTPS + API key, 15s| Client[AlertsClient]
     Client -->|stream parse| Parser[AlertsParser]
     Parser --> Builder[SnapshotBuilder]
     Cat[LocationCatalog<br/>PROGMEM] --> Builder

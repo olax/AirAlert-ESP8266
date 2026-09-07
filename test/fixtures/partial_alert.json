@@ -1,7 +1,8 @@
-{"alerts":[
- {"id":102,"location_title":"Ірпінська територіальна громада","location_type":"hromada",
-  "started_at":"2026-08-21T08:10:00.000Z","finished_at":null,
-  "updated_at":"2026-08-21T08:10:02.000Z","alert_type":"air_raid",
-  "location_uid":"123","location_oblast":"Київська область",
-  "location_oblast_uid":"14","location_raion":"Бучанський район","notes":null,"calculated":false}
-]}
+[
+ {"regionId":"123","regionType":"Community","regionName":"Ірпінська територіальна громада","regionEngName":"",
+  "lastUpdate":"2026-08-21T08:10:00Z",
+  "activeAlerts":[
+   {"regionId":"123","regionType":"Community","type":"AIR","lastUpdate":"2026-08-21T08:10:00Z",
+    "activeAlertLevels":[{"alertLevel":"Red","reason":"","createdAt":"2026-08-21T08:10:00Z"}]}
+  ]}
+]

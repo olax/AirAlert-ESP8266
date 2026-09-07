@@ -32,9 +32,10 @@ public:
     void setConfig(const Config& c) { cfg_ = c; }
     void setApiStale(bool stale) { apiStale_ = stale; }
 
-    // How a Started event is voiced (SPEC 26-28):
-    //   Normal - full START pattern; Short - one startup pulse (boot into an
-    //   already-active alert); Silent - reboot-loop cooldown active, no sound.
+    // How a Started/Ended event is voiced (SPEC 26-28):
+    //   Normal - full pattern; Short - one startup pulse (boot into an
+    //   already-active alert); Silent - state bookkeeping only, no sound
+    //   (reboot-loop cooldown, partial without siren, air-raid colour change).
     enum class StartupMode : uint8_t { Normal, Short, Silent };
     void onEngineEvent(const EngineEvent& ev, StartupMode mode, uint32_t nowMs);
 
@@ -130,7 +131,8 @@ inline void NotificationEngine::onEngineEvent(const EngineEvent& ev, StartupMode
             break;
         case AlertEvent::Ended:
             activeMask_ &= static_cast<uint8_t>(~bit);
-            if (p.enabled) queue_.push({Signal::End, ev.type, p.priority});
+            if (p.enabled && mode != StartupMode::Silent)
+                queue_.push({Signal::End, ev.type, p.priority});
             if (activeMask_ == 0) mute_.onAllClear(); // SPEC 52
             break;
         case AlertEvent::LocationAdded: // SPEC 37

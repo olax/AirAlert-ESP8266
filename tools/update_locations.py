@@ -1,101 +1,115 @@
 #!/usr/bin/env python3
 """Location catalogue generator (SPEC 13-14).
 
-Source: the official UID table shipped in alerts-ua/alerts-in-ua-py
-(location_uid_resolver.py). It contains oblasts, raions and the two
-special-status cities. Hromada UIDs are NOT published officially - hromada
-selection is a documented v1 limitation (docs/RESEARCH.md).
+Source: ukrainealarm.com `GET /api/v3/regions` - the full State > District >
+Community tree with the same regionIds the alerts endpoint uses.
 
-Hierarchy is recovered from table order: each oblast is followed by its raions.
+  UKRAINEALARM_API_KEY=... python3 tools/update_locations.py
+  python3 tools/update_locations.py --from-file regions.json   # offline
 
 Outputs:
-  web/locations.json      - browser catalogue (names, for the Locations UI)
-  src/alerts/LocationTable.h - PROGMEM matching table for firmware
+  web/locations.json         - browser catalogue: oblasts, raions, special
+                               cities (hromada picking is still a UI limitation)
+  src/alerts/LocationTable.h - PROGMEM matching table for firmware, INCLUDING
+                               hromadas so a hromada alert resolves to its
+                               raion/oblast (partial coverage, SPEC 18)
 """
-import ast
+import argparse
 import json
-import re
+import os
 import sys
 import urllib.request
 from datetime import datetime, timezone
 
-SRC = ("https://raw.githubusercontent.com/alerts-ua/alerts-in-ua-py/"
-       "master/alerts_in_ua/location_uid_resolver.py")
+URL = "https://api.ukrainealarm.com/api/v3/regions"
+TYPE_ENUM = {"oblast": 0, "raion": 1, "hromada": 2, "city": 3}
 
-def fetch_table() -> dict[int, str]:
-    with urllib.request.urlopen(SRC, timeout=30) as r:
-        text = r.read().decode()
-    m = re.search(r"self\.uid_to_location\s*=\s*(\{.*?\})", text, re.S)
-    if not m:
-        sys.exit("uid_to_location dict not found in source")
-    return ast.literal_eval(m.group(1))
 
-def classify(name: str) -> str:
-    if name.startswith("м. "):
-        return "city"
-    if name.endswith("область"):
-        return "oblast"
-    if name.endswith("район"):
-        return "raion"
-    if "Автономна Республіка" in name:
-        return "oblast"  # АР Крим behaves as an oblast-level unit
-    return "unknown"
+def fetch_tree(key: str) -> dict:
+    req = urllib.request.Request(URL, headers={"Authorization": key})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        return json.load(r)
+
+
+def flatten(tree: dict) -> list[dict]:
+    out = []
+    # uid order = the classic catalogue order (oblasts 3..28, Kyiv, cities, Crimea)
+    for st in sorted(tree["states"], key=lambda r: int(r["regionId"])):
+        uid = int(st["regionId"])
+        if uid == 0:  # "Тестовий регіон"
+            continue
+        typ = "city" if st["regionName"].startswith("м. ") else "oblast"
+        out.append({"uid": uid, "name": st["regionName"], "type": typ})
+        for d in sorted(st.get("regionChildIds", []), key=lambda r: r["regionName"]):
+            duid = int(d["regionId"])
+            out.append({"uid": duid, "name": d["regionName"], "type": "raion",
+                        "oblast_uid": uid})
+            for c in d.get("regionChildIds", []):
+                out.append({"uid": int(c["regionId"]), "name": c["regionName"],
+                            "type": "hromada", "oblast_uid": uid, "raion_uid": duid})
+    return out
+
 
 def main() -> None:
-    table = fetch_table()
-    locations, cur_oblast = [], 0
-    for uid, name in table.items():  # insertion order = official order
-        typ = classify(name)
-        loc = {"uid": uid, "name": name, "type": typ}
-        if typ in ("oblast",):
-            cur_oblast = uid
-        elif typ == "raion":
-            loc["oblast_uid"] = cur_oblast
-        locations.append(loc)
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--from-file", help="use a saved /api/v3/regions response")
+    a = ap.parse_args()
+    if a.from_file:
+        tree = json.load(open(a.from_file, encoding="utf-8"))
+    else:
+        key = os.environ.get("UKRAINEALARM_API_KEY")
+        if not key:
+            sys.exit("set UKRAINEALARM_API_KEY or pass --from-file")
+        tree = fetch_tree(key)
+    locations = flatten(tree)
 
     # validation (SPEC 144)
     uids = [l["uid"] for l in locations]
     assert len(uids) == len(set(uids)), "duplicate UID"
+    assert all(0 < u < 65536 for u in uids), "uid out of uint16 range"
     assert all(l["name"] for l in locations), "empty name"
-    assert all(l["type"] != "unknown" or l["uid"] in (0,) for l in locations), \
-        f"unclassified: {[l for l in locations if l['type'] == 'unknown']}"
     for l in locations:
-        if "oblast_uid" in l:
-            assert l["oblast_uid"] in uids, f"bad parent for {l}"
+        for k in ("oblast_uid", "raion_uid"):
+            if k in l:
+                assert l[k] in uids, f"bad parent for {l}"
 
+    web = [l for l in locations if l["type"] != "hromada"]
     out = {
         "schema": 1,
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "source": "alerts.in.ua official UID table (alerts-in-ua-py)",
-        "count": len(locations),
-        "locations": locations,
+        "source": "ukrainealarm.com /api/v3/regions",
+        "count": len(web),
+        "locations": web,
     }
     with open("web/locations.json", "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, separators=(",", ":"))
 
-    type_enum = {"oblast": 0, "raion": 1, "hromada": 2, "city": 3, "unknown": 4}
     rows = "\n".join(
-        f"    {{{l['uid']}, {type_enum[l['type']]}, {l.get('oblast_uid', 0)}, 0}},"
+        f"    {{{l['uid']}, {TYPE_ENUM[l['type']]}, {l.get('oblast_uid', 0)}, {l.get('raion_uid', 0)}}},"
         for l in sorted(locations, key=lambda x: x["uid"]))
     with open("src/alerts/LocationTable.h", "w", encoding="utf-8") as f:
         f.write(f"""#pragma once
 // GENERATED by tools/update_locations.py - do not edit (SPEC 13-14).
-// {len(locations)} locations, source: official alerts.in.ua UID table.
+// {len(locations)} locations, source: ukrainealarm.com /api/v3/regions.
 #include <cstdint>
+#include <pgmspace.h>
 
 struct LocationRow {{
     uint16_t uid;
     uint8_t type;       // LocationType enum order
     uint16_t oblastUid; // 0 = none
-    uint16_t raionUid;  // 0 = none (hromada UIDs not published officially)
+    uint16_t raionUid;  // 0 = none
 }};
 
-constexpr LocationRow kLocationTable[] = {{
+// Flash-resident: read rows via memcpy_P only (LocationCatalog).
+static const LocationRow kLocationTable[] PROGMEM = {{
 {rows}
 }};
 constexpr size_t kLocationTableSize = sizeof(kLocationTable) / sizeof(kLocationTable[0]);
 """)
-    print(f"ok: {len(locations)} locations -> web/locations.json, src/alerts/LocationTable.h")
+    print(f"{len(locations)} locations ({len(web)} in web catalogue) -> "
+          "web/locations.json, src/alerts/LocationTable.h")
+
 
 if __name__ == "__main__":
     main()

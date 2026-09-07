@@ -2,8 +2,8 @@
 
 ## Межі довіри
 
-- **alerts.in.ua** — HTTPS обовʼязково, BearSSL з trust anchors (4× GTS Root).
-  `setInsecure()` заборонено (SPEC 85). Зміна CA у alerts.in.ua = оновлення
+- **ukrainealarm.com** — HTTPS обовʼязково, BearSSL з trust anchors (4× GTS Root).
+  `setInsecure()` заборонено (SPEC 85). Зміна CA у ukrainealarm.com = оновлення
   прошивки (задокументований компроміс).
 - **Web UI** — HTTP у довіреному LAN-периметрі (WPA2/WPA3). HTTPS-сервер на
   ESP8266 непрактичний (SPEC 101). НЕ відкривати порт 80 назовні.

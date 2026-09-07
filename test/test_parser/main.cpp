@@ -82,7 +82,7 @@ void test_multiple_alerts_multi_select() {
     auto b = makeBuilder({SEL_HROMADA, SEL_KYIV});
     ParseStats st;
     TEST_ASSERT_EQUAL(ParseError::None, run("multiple_alerts.json", b, st));
-    TEST_ASSERT_EQUAL(3, st.total);
+    TEST_ASSERT_EQUAL(4, st.total); // raion entry repeats the inherited oblast alert
     const auto& air = b.snapshot().types[static_cast<int>(AlertType::AirRaid)];
     const auto& art = b.snapshot().types[static_cast<int>(AlertType::ArtilleryShelling)];
     TEST_ASSERT_EQUAL(Coverage::Full, air.coverage);   // oblast 14 covers hromada; Luhansk ignored
@@ -107,7 +107,7 @@ void test_unknown_type_no_crash() { // Invariant 9
     ParseStats st;
     TEST_ASSERT_EQUAL(ParseError::None, run("unknown_type.json", b, st));
     TEST_ASSERT_EQUAL(2, st.total);
-    TEST_ASSERT_EQUAL(1, st.skipped); // null location_uid entry dropped
+    TEST_ASSERT_EQUAL(1, st.skipped); // null regionId entry dropped
     TEST_ASSERT_EQUAL(Coverage::Full,
         b.snapshot().types[static_cast<int>(AlertType::Unknown)].coverage);
 }
@@ -118,7 +118,7 @@ void test_invalid_json_rejected() { // SPEC 167, Invariant 6
     TEST_ASSERT_EQUAL(ParseError::JsonInvalid, run("invalid.json", b, st));
 }
 
-void test_missing_alerts_key_rejected() { // SPEC 138
+void test_missing_alerts_array_rejected() { // SPEC 138: root must be the region array
     auto b = makeBuilder({SEL_OBLAST});
     ParseStats st;
     TEST_ASSERT_EQUAL(ParseError::NoAlertsArray, run("missing_alerts.json", b, st));
@@ -127,10 +127,9 @@ void test_missing_alerts_key_rejected() { // SPEC 138
 void test_uid_string_and_number_forms() {
     auto b = makeBuilder({SEL_OBLAST});
     ParseStats st;
-    const char* j = R"({"alerts":[
-      {"id":1,"alert_type":"air_raid","location_type":"oblast",
-       "location_uid":14,"location_oblast_uid":14,
-       "started_at":"2026-08-21T08:00:00.000Z","calculated":false}]})";
+    const char* j = R"([{"regionId":14,"activeAlerts":[
+      {"regionId":14,"type":"AIR","lastUpdate":"2026-08-21T08:00:00Z",
+       "activeAlertLevels":[{"alertLevel":"Red","createdAt":"2026-08-21T08:00:00.000Z"}]}]}])";
     TEST_ASSERT_EQUAL(ParseError::None, parseAlertsJson(j, strlen(j), b, st));
     TEST_ASSERT_EQUAL(Coverage::Full,
         b.snapshot().types[static_cast<int>(AlertType::AirRaid)].coverage);
@@ -153,6 +152,36 @@ void test_per_location_details() { // dashboard breakdown (SPEC 71)
     TEST_ASSERT_EQUAL(31, b.selectedUid(1));
 }
 
+// ukrainealarm levels: yellow (drones) and red (missiles) are separate types
+// with separate profiles. On ONE alert red dominates (raion 67 carries both
+// levels -> red only); a yellow-only alert elsewhere (oblast 14) is yellow.
+void test_yellow_and_red_levels_are_separate_types() {
+    auto b = makeBuilder({SEL_HROMADA});
+    ParseStats st;
+    TEST_ASSERT_EQUAL(ParseError::None, run("levels.json", b, st));
+    TEST_ASSERT_EQUAL(4, st.total);
+    TEST_ASSERT_EQUAL(1, st.skipped); // INFO is a message, not a threat
+    const auto& red = b.snapshot().types[static_cast<int>(AlertType::AirRaid)];
+    const auto& yellow = b.snapshot().types[static_cast<int>(AlertType::AirRaidYellow)];
+    TEST_ASSERT_EQUAL(Coverage::Full, red.coverage);    // raion 67 covers hromada 123
+    TEST_ASSERT_EQUAL(Coverage::Full, yellow.coverage); // oblast 14 covers hromada 123
+    TEST_ASSERT_EQUAL_INT64(parseIso8601Utc("2026-09-07T06:44:43Z"), red.earliestStartedAt);
+    TEST_ASSERT_EQUAL_INT64(parseIso8601Utc("2026-09-07T07:10:00Z"), yellow.earliestStartedAt);
+    TEST_ASSERT_EQUAL(1, yellow.locationCount);         // 67's yellow level was subsumed by its red
+    // no activeAlertLevels at all = ungraded = red, start from lastUpdate
+    const auto& art = b.snapshot().types[static_cast<int>(AlertType::ArtilleryShelling)];
+    TEST_ASSERT_EQUAL(Coverage::Full, art.coverage);
+    TEST_ASSERT_EQUAL_INT64(parseIso8601Utc("2026-09-07T05:00:00Z"), art.earliestStartedAt);
+}
+
+void test_unknown_level_counts_as_red() { // a siren errs on the loud side
+    TEST_ASSERT_EQUAL(AlertType::AirRaid, alertTypeFromApi("AIR", "Orange"));
+    TEST_ASSERT_EQUAL(AlertType::AirRaid, alertTypeFromApi("AIR", nullptr));
+    TEST_ASSERT_EQUAL(AlertType::AirRaidYellow, alertTypeFromApi("AIR", "Yellow"));
+    TEST_ASSERT_EQUAL(AlertType::Nuclear, alertTypeFromApi("NUCLEAR", "Yellow")); // levels only for AIR
+    TEST_ASSERT_EQUAL(AlertType::Unknown, alertTypeFromApi("WHATEVER", "Red"));
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_no_alerts);
@@ -162,8 +191,10 @@ int main() {
     RUN_TEST(test_chemical_and_nuclear_types);
     RUN_TEST(test_unknown_type_no_crash);
     RUN_TEST(test_invalid_json_rejected);
-    RUN_TEST(test_missing_alerts_key_rejected);
+    RUN_TEST(test_missing_alerts_array_rejected);
     RUN_TEST(test_uid_string_and_number_forms);
     RUN_TEST(test_per_location_details);
+    RUN_TEST(test_yellow_and_red_levels_are_separate_types);
+    RUN_TEST(test_unknown_level_counts_as_red);
     return UNITY_END();
 }

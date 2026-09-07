@@ -1,9 +1,11 @@
-# Демо: тривога область -> ескалація -> друга загроза -> відбій
+# Демо: жовта (дрони) -> червона (ракети) на районі -> хімічна в громаді -> відбій
 sleep 20
-start air_raid 14
+start air_raid 75 yellow
 sleep 60
-start chemical 10123 14
+start air_raid 75 red
 sleep 60
-stop chemical 10123
+start chemical 703
+sleep 60
+stop chemical 703
 sleep 30
-stop air_raid 14
+stop air_raid 75

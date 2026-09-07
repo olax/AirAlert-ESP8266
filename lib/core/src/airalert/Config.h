@@ -10,7 +10,7 @@
 
 namespace airalert {
 
-constexpr uint8_t kConfigSchema = 1;
+constexpr uint8_t kConfigSchema = 2;
 
 // Whole-app configuration (SPEC 121 defaults, 175 separation).
 // Secrets live in /secrets.json, never here (SPEC 91, 176).
@@ -18,9 +18,10 @@ struct AppConfig {
     uint8_t schemaVersion = kConfigSchema;
     char deviceName[32] = "AirAlert";
 
-    // alerts
-    uint16_t pollIntervalSec = 15;   // min 10 (SPEC 7)
-    uint16_t apiStaleAfterSec = 60;
+    // alerts. ukrainealarm.com accepts ~3 requests/min per key and answers
+    // the rest with 401 (docs/RESEARCH.md): 20 s = 3/min, ~2 of them accepted.
+    uint16_t pollIntervalSec = 20;   // min 10 (SPEC 7)
+    uint16_t apiStaleAfterSec = 90;  // survives 3 rate-limited polls in a row
     uint8_t startConfirmations = 1;
     uint8_t endConfirmations = 2;
     bool partialActive = true;
@@ -279,6 +280,13 @@ inline ConfigError configFromJson(JsonVariantConst d, AppConfig& c) {
                 return ConfigError::BadPattern;
             p.reminderIntervalMs = intervalSec * 1000UL;
         }
+    }
+    // schema 1 -> 2: the alerts.in.ua-era 15 s / 60 s defaults poll ukrainealarm
+    // past its ~3/min quota; lift only untouched defaults (SPEC 90 migration).
+    if (c.schemaVersion == 1) {
+        if (c.pollIntervalSec == 15) c.pollIntervalSec = 20;
+        if (c.apiStaleAfterSec == 60) c.apiStaleAfterSec = 90;
+        c.schemaVersion = 2;
     }
     return validateConfig(c);
 }

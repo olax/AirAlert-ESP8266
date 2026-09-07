@@ -21,7 +21,7 @@ pio test -e native -f test_engine   # один suite
 ## Фікстури та емулятор API
 
 - `test/fixtures/*.json` — зліпки відповідей API, включно з битими.
-- `tools/alerts_emulator.py` — динамічний емулятор alerts.in.ua:
+- `tools/alerts_emulator.py` — динамічний емулятор ukrainealarm.com:
 
 ```bash
 python3 tools/alerts_emulator.py --port 8787 --log req.jsonl

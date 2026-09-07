@@ -11,7 +11,7 @@ void test_defaults_valid() {
     AppConfig c;
     TEST_ASSERT_EQUAL(ConfigError::None, validateConfig(c));
     TEST_ASSERT_EQUAL(0, c.selectedCount);
-    TEST_ASSERT_EQUAL(15, c.pollIntervalSec);
+    TEST_ASSERT_EQUAL(20, c.pollIntervalSec);
     TEST_ASSERT_EQUAL(90, c.profiles[static_cast<int>(AlertType::Nuclear)].priority);
 }
 
@@ -57,8 +57,9 @@ void test_partial_old_config_keeps_defaults() { // SPEC 90: N+1 reads N
     TEST_ASSERT_TRUE(deserializeJson(d, old) == DeserializationError::Ok);
     AppConfig c;
     TEST_ASSERT_EQUAL(ConfigError::None, configFromJson(d.as<JsonVariantConst>(), c));
-    TEST_ASSERT_EQUAL(30, c.pollIntervalSec);         // taken from file
-    TEST_ASSERT_EQUAL(60, c.apiStaleAfterSec);        // default kept
+    TEST_ASSERT_EQUAL(30, c.pollIntervalSec);         // taken from file (not a default: kept)
+    TEST_ASSERT_EQUAL(90, c.apiStaleAfterSec);        // default kept
+    TEST_ASSERT_EQUAL(2, c.schemaVersion);            // migrated
     TEST_ASSERT_EQUAL(0, c.selectedCount);            // no implicit Kyiv subscription
     TEST_ASSERT_TRUE(c.profiles[0].enabled);
 }
@@ -134,6 +135,21 @@ void test_validation_rejects_stale_range_and_location_shape() {
     TEST_ASSERT_EQUAL(ConfigError::BadLocation, validateConfig(c));
 }
 
+void test_schema1_default_cadence_migrates_to_schema2() { // ukrainealarm quota
+    const char* old = R"({"schema":1,"alerts":{"poll_sec":15,"stale_sec":60}})";
+    JsonDocument d;
+    TEST_ASSERT_TRUE(deserializeJson(d, old) == DeserializationError::Ok);
+    AppConfig c;
+    TEST_ASSERT_EQUAL(ConfigError::None, configFromJson(d.as<JsonVariantConst>(), c));
+    TEST_ASSERT_EQUAL(20, c.pollIntervalSec);
+    TEST_ASSERT_EQUAL(90, c.apiStaleAfterSec);
+    const char* cur = R"({"schema":2,"alerts":{"poll_sec":15,"stale_sec":60}})";
+    TEST_ASSERT_TRUE(deserializeJson(d, cur) == DeserializationError::Ok);
+    AppConfig c2;
+    TEST_ASSERT_EQUAL(ConfigError::None, configFromJson(d.as<JsonVariantConst>(), c2));
+    TEST_ASSERT_EQUAL(15, c2.pollIntervalSec); // explicit choice on schema 2 stays
+}
+
 void test_validation_rejects_bad_ranges() { // SPEC 7, 42, 155
     AppConfig c;
     c.pollIntervalSec = 5; // below API-safe minimum
@@ -193,6 +209,7 @@ int main() {
     RUN_TEST(test_defaults_valid);
     RUN_TEST(test_roundtrip_preserves_everything);
     RUN_TEST(test_partial_old_config_keeps_defaults);
+    RUN_TEST(test_schema1_default_cadence_migrates_to_schema2);
     RUN_TEST(test_validation_rejects_bad_ranges);
     RUN_TEST(test_json_rejects_too_many_locations_without_truncating);
     RUN_TEST(test_json_rejects_invalid_and_duplicate_locations);

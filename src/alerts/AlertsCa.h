@@ -1,5 +1,6 @@
 #pragma once
-// Trust anchors for api.alerts.in.ua ONLY (SPEC 85): the 4 GTS roots.
+// Trust anchors for api.ukrainealarm.com ONLY (SPEC 85): the 4 GTS roots
+// (Cloudflare edge cert chains to GTS WE1 -> GTS Root R4).
 // Deliberately narrow - a wider bundle (see CaBundle.h) parses to ~8 RSA-4096
 // trust anchors and starves the heap during the poll-path TLS handshake
 // (observed StoreProhibited crash). OTA URL uses the wide bundle instead:

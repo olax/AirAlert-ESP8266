@@ -1,17 +1,22 @@
-{"alerts":[
- {"id":201,"location_title":"Київська область","location_type":"oblast",
-  "started_at":"2026-08-21T08:00:00.000Z","finished_at":null,
-  "updated_at":"2026-08-21T08:00:05.000Z","alert_type":"air_raid",
-  "location_uid":"14","location_oblast":"Київська область",
-  "location_oblast_uid":"14","location_raion":null,"notes":null,"calculated":false},
- {"id":202,"location_title":"Бучанський район","location_type":"raion",
-  "started_at":"2026-08-21T07:30:00.000Z","finished_at":null,
-  "updated_at":"2026-08-21T07:30:01.000Z","alert_type":"artillery_shelling",
-  "location_uid":"67","location_oblast":"Київська область",
-  "location_oblast_uid":"14","location_raion":"Бучанський район","notes":null,"calculated":false},
- {"id":203,"location_title":"Луганська область","location_type":"oblast",
-  "started_at":"2026-08-21T02:00:00.000Z","finished_at":null,
-  "updated_at":"2026-08-21T02:00:03.000Z","alert_type":"air_raid",
-  "location_uid":"16","location_oblast":"Луганська область",
-  "location_oblast_uid":"16","location_raion":null,"notes":null,"calculated":false}
-]}
+[
+ {"regionId":"14","regionType":"State","regionName":"Київська область","regionEngName":"Kyivska region",
+  "lastUpdate":"2026-08-21T08:00:00Z",
+  "activeAlerts":[
+   {"regionId":"14","regionType":"State","type":"AIR","lastUpdate":"2026-08-21T08:00:00Z",
+    "activeAlertLevels":[{"alertLevel":"Red","reason":"","createdAt":"2026-08-21T08:00:00.000Z"}]}
+  ]},
+ {"regionId":"67","regionType":"District","regionName":"Бучанський район","regionEngName":"",
+  "lastUpdate":"2026-08-21T07:30:00Z",
+  "activeAlerts":[
+   {"regionId":"67","regionType":"District","type":"ARTILLERY","lastUpdate":"2026-08-21T07:30:00Z",
+    "activeAlertLevels":[{"alertLevel":"Red","reason":"","createdAt":"2026-08-21T07:30:00Z"}]},
+   {"regionId":"14","regionType":"State","type":"AIR","lastUpdate":"2026-08-21T08:00:00Z",
+    "activeAlertLevels":[{"alertLevel":"Red","reason":"","createdAt":"2026-08-21T08:00:00.000Z"}]}
+  ]},
+ {"regionId":"16","regionType":"State","regionName":"Луганська область","regionEngName":"Luhanska region",
+  "lastUpdate":"2022-04-04T16:45:00Z",
+  "activeAlerts":[
+   {"regionId":"16","regionType":"State","type":"AIR","lastUpdate":"2022-04-04T16:45:00Z",
+    "activeAlertLevels":[{"alertLevel":"Red","reason":"","createdAt":"2022-04-04T16:45:00Z"}]}
+  ]}
+]

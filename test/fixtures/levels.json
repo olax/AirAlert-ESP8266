@@ -1,0 +1,20 @@
+[
+ {"regionId":"67","regionType":"District","regionName":"Бучанський район","regionEngName":"",
+  "lastUpdate":"2026-09-07T07:04:35.888554Z",
+  "activeAlerts":[
+   {"regionId":"67","regionType":"District","type":"AIR","lastUpdate":"2026-09-07T07:04:35.888554Z",
+    "activeAlertLevels":[
+     {"alertLevel":"Yellow","reason":"Дронова загроза (жовтий рівень)","createdAt":"2026-09-07T07:04:36.173953Z"},
+     {"alertLevel":"Red","reason":"Ракетна загроза (червоний рівень)","createdAt":"2026-09-07T06:44:43.605961Z"}
+    ]},
+   {"regionId":"67","regionType":"District","type":"INFO","lastUpdate":"2026-09-07T07:00:00Z",
+    "activeAlertLevels":[{"alertLevel":"Red","reason":"","createdAt":"2026-09-07T07:00:00Z"}]},
+   {"regionId":"67","regionType":"District","type":"ARTILLERY","lastUpdate":"2026-09-07T05:00:00Z"}
+  ]},
+ {"regionId":"14","regionType":"State","regionName":"Київська область","regionEngName":"",
+  "lastUpdate":"2026-09-07T07:10:00Z",
+  "activeAlerts":[
+   {"regionId":"14","regionType":"State","type":"AIR","lastUpdate":"2026-09-07T07:10:00Z",
+    "activeAlertLevels":[{"alertLevel":"Yellow","reason":"Дронова загроза (жовтий рівень)","createdAt":"2026-09-07T07:10:00Z"}]}
+  ]}
+]

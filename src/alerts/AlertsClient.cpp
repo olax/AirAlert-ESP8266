@@ -6,35 +6,29 @@
 
 // SPEC 133: production hostname is immutable. Dev builds may point at a local
 // emulator at runtime (serial `setmock`), never via any web UI.
-static const char kAlertsUrl[] = "https://api.alerts.in.ua/v1/alerts/active.json";
+static const char kAlertsHost[] = "api.ukrainealarm.com";
+static const char kAlertsUrl[] = "https://api.ukrainealarm.com/api/v3/alerts";
 
-// Constant-memory body parse: alerts are deserialized ONE ELEMENT at a time,
-// so heap use does not grow with the nationwide alert count. The previous
-// whole-document parse hit DeserializationError::NoMemory on busy nights
-// (36+ alerts with ~25 KB free heap while TLS buffers are live) and showed
-// up as a permanent API_PARSE_ERROR streak.
+// Constant-memory body parse: the response is a top-level array of region
+// entries, deserialized ONE ENTRY at a time, so heap use does not grow with
+// the nationwide alert count. A whole-document parse hit
+// DeserializationError::NoMemory on busy nights (~20 KB body with ~25 KB free
+// heap while TLS buffers are live) and showed up as a permanent
+// API_PARSE_ERROR streak.
 AlertsClient::Result::Kind AlertsClient::parseBody(Stream& in,
                                                    airalert::SnapshotBuilder& builder,
                                                    Result& r) {
-    // 1) scan to the "alerts" key and its '[' (first top-level key in practice)
-    static const char kKey[] = "\"alerts\"";
-    size_t ki = 0;
+    // 1) scan to the opening '[' of the region array
     bool inArray = false;
     const uint32_t deadline = millis() + 8000;
     while (static_cast<int32_t>(millis() - deadline) < 0) {
         const int c = in.read();
         if (c < 0) {
-            if (!in.available()) { delay(1); continue; }
+            if (!in.available()) delay(1);
             continue;
         }
-        if (!inArray) {
-            if (ki < sizeof kKey - 1) {
-                ki = (c == kKey[ki]) ? ki + 1 : (c == kKey[0] ? 1 : 0);
-            } else if (c == '[') {
-                inArray = true;
-                break;
-            }
-        }
+        if (c == '[') { inArray = true; break; }
+        if (c != ' ' && c != '\r' && c != '\n' && c != '\t') break; // not an array body
     }
     if (!inArray) {
         r.parseDetail = "NoAlertsArray";
@@ -45,7 +39,7 @@ AlertsClient::Result::Kind AlertsClient::parseBody(Stream& in,
     JsonDocument filter;
     airalert::buildAlertElementFilter(filter);
 
-    // 2) element loop: {..},{..}] — one small filtered doc per alert
+    // 2) element loop: {..},{..}] — one small filtered doc per region entry
     while (static_cast<int32_t>(millis() - deadline) < 0) {
         int c = in.peek();
         if (c < 0) { delay(1); continue; }
@@ -61,10 +55,7 @@ AlertsClient::Result::Kind AlertsClient::parseBody(Stream& in,
             r.heapAtError = ESP.getFreeHeap();
             return Result::Kind::ParseError;
         }
-        ++r.stats.total;
-        const airalert::Alert a = airalert::alertFromJson(doc.as<JsonVariantConst>());
-        if (a.locationUid == 0) ++r.stats.skipped;
-        else builder.add(a);
+        airalert::regionToAlerts(doc.as<JsonVariantConst>(), builder, r.stats);
         yield();
     }
     r.parseDetail = "timeout";
@@ -108,7 +99,7 @@ AlertsClient::Result AlertsClient::poll(airalert::SnapshotBuilder& builder) {
         static int8_t mfln = -1; // -1 unknown, 0 no, 1 yes
         if (mfln < 0 && url == kAlertsUrl)
             mfln = BearSSL::WiFiClientSecure::probeMaxFragmentLength(
-                       "api.alerts.in.ua", 443, 1024) ? 1 : 0;
+                       kAlertsHost, 443, 1024) ? 1 : 0;
         secureClient.setBufferSizes(mfln == 1 ? 1024 : 4096, 512); // SPEC 113
     }
 
@@ -117,7 +108,7 @@ AlertsClient::Result AlertsClient::poll(airalert::SnapshotBuilder& builder) {
     http.useHTTP10(true); // no chunked encoding -> ArduinoJson can read the stream
     if (!http.begin(*client, url)) { r.kind = Result::Kind::NetError; return r; }
 
-    http.addHeader("Authorization", "Bearer " + token_);
+    http.addHeader("Authorization", token_); // ukrainealarm: raw key, no scheme
     if (lastModified_.length()) http.addHeader("If-Modified-Since", lastModified_);
     const char* keys[] = {"Last-Modified", "Retry-After"};
     http.collectHeaders(keys, 2);
@@ -143,7 +134,7 @@ AlertsClient::Result AlertsClient::poll(airalert::SnapshotBuilder& builder) {
                 r.kind = Result::Kind::ParseError;
             }
             break;
-        case HTTP_CODE_UNAUTHORIZED: r.kind = Result::Kind::AuthError; break;   // SPEC 163
+        case HTTP_CODE_UNAUTHORIZED: r.kind = Result::Kind::AuthError; break;   // bad key OR rate limit: policy in doPoll()
         case HTTP_CODE_FORBIDDEN: r.kind = Result::Kind::Forbidden; break;      // SPEC 164
         case HTTP_CODE_TOO_MANY_REQUESTS:                                        // SPEC 165
             r.kind = Result::Kind::RateLimited;

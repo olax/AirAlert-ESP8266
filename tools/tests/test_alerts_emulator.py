@@ -41,16 +41,44 @@ class AlertsEmulatorTests(unittest.TestCase):
         self.assertTrue(acquired)
 
     def test_request_log_never_exposes_token_characters(self):
-        token = "Bearer secret-token-value"
+        token = "secret-token-value"
         marker = emulator.token_marker(token)
 
         self.assertEqual("present", marker)
         self.assertNotIn("secret-token-value", marker)
 
     def test_bad_location_uid_returns_an_error_instead_of_raising(self):
-        self.assertIn("must be integers", emulator.do_cmd("start air_raid nope"))
+        self.assertIn("must be an integer", emulator.do_cmd("start air_raid nope"))
         self.assertIn("must be an integer", emulator.do_cmd("stop air_raid nope"))
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UkraineAlarmShapeTests(unittest.TestCase):
+    def setUp(self):
+        with emulator.state_lock:
+            emulator.alerts.clear()
+
+    def test_levels_of_one_alert_merge_into_one_active_alert(self):
+        emulator.do_cmd("start air_raid 75 yellow")
+        emulator.do_cmd("start air_raid 75 red")
+        emulator.do_cmd("start chemical 703")
+        with emulator.state_lock:
+            body = emulator.response_body()
+
+        by_uid = {r["regionId"]: r for r in body}
+        air = by_uid["75"]["activeAlerts"]
+        self.assertEqual(1, len(air))
+        self.assertEqual("AIR", air[0]["type"])
+        self.assertEqual({"Yellow", "Red"},
+                         {l["alertLevel"] for l in air[0]["activeAlertLevels"]})
+        self.assertEqual("CHEMICAL", by_uid["703"]["activeAlerts"][0]["type"])
+        self.assertEqual("Community", by_uid["703"]["regionType"])
+
+    def test_stop_without_level_clears_every_level(self):
+        emulator.do_cmd("start air_raid 75 yellow")
+        emulator.do_cmd("start air_raid 75 red")
+        self.assertIn("stopped", emulator.do_cmd("stop air_raid 75"))
+        self.assertEqual({}, emulator.alerts)

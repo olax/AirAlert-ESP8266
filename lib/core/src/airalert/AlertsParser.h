@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <cstring>
 #include <ArduinoJson.h>
 #include "Alert.h"
 #include "Iso8601.h"
@@ -10,23 +11,30 @@ namespace airalert {
 enum class ParseError : uint8_t { None, JsonInvalid, NoAlertsArray };
 
 struct ParseStats {
-    uint16_t total = 0;   // alerts seen in the response
-    uint16_t skipped = 0; // entries without a usable location uid
+    uint16_t total = 0;   // active alerts seen in the response (all regions)
+    uint16_t skipped = 0; // entries without a usable region id, or INFO messages
 };
 
-// Filter: keep only the fields core logic needs (SPEC 111-112).
-inline void buildAlertsFilter(JsonDocument& f) {
-    JsonObject a = f["alerts"].add<JsonObject>();
-    a["id"] = true;
-    a["alert_type"] = true;
-    a["location_type"] = true;
-    a["location_uid"] = true;
-    a["location_oblast_uid"] = true;
-    a["started_at"] = true;
-    a["calculated"] = true;
+// ukrainealarm.com GET /api/v3/alerts:
+//   [{regionId, regionType, activeAlerts: [{regionId, type, lastUpdate,
+//      activeAlertLevels: [{alertLevel, reason, createdAt}]}]}, ...]
+// A region entry lists its own alerts plus the ones inherited from parents.
+// Filters keep only the fields core logic needs (SPEC 111-112).
+inline void regionFilter(JsonObject r) {
+    JsonObject a = r["activeAlerts"].add<JsonObject>();
+    a["regionId"] = true;
+    a["type"] = true;
+    a["lastUpdate"] = true;
+    JsonObject l = a["activeAlertLevels"].add<JsonObject>();
+    l["alertLevel"] = true;
+    l["createdAt"] = true;
 }
+// Whole response (native tests / small bodies).
+inline void buildAlertsFilter(JsonDocument& f) { regionFilter(f.add<JsonObject>()); }
+// One region entry (constant-memory stream parser on the device).
+inline void buildAlertElementFilter(JsonDocument& f) { regionFilter(f.to<JsonObject>()); }
 
-// API serves uids as strings ("16"); tolerate numbers too.
+// API serves ids as strings ("16"); tolerate numbers too.
 inline uint16_t uidFromJson(JsonVariantConst v) {
     if (v.is<unsigned>()) return static_cast<uint16_t>(v.as<unsigned>());
     const char* s = v.as<const char*>();
@@ -36,42 +44,46 @@ inline uint16_t uidFromJson(JsonVariantConst v) {
     return static_cast<uint16_t>(r);
 }
 
-// Element-level filter: same fields, for one alert object (used by the
-// constant-memory stream parser on the device).
-inline void buildAlertElementFilter(JsonDocument& f) {
-    f["id"] = true;
-    f["alert_type"] = true;
-    f["location_type"] = true;
-    f["location_uid"] = true;
-    f["location_oblast_uid"] = true;
-    f["started_at"] = true;
-    f["calculated"] = true;
-}
-
-// One alert object -> Alert. Unknown types never abort (Invariant 9).
-inline Alert alertFromJson(JsonVariantConst o) {
-    Alert a;
-    a.id = o["id"] | 0u;
-    a.type = alertTypeFromString(o["alert_type"] | static_cast<const char*>(nullptr));
-    a.locationType = locationTypeFromString(o["location_type"] | static_cast<const char*>(nullptr));
-    a.locationUid = uidFromJson(o["location_uid"]);
-    a.oblastUid = uidFromJson(o["location_oblast_uid"]);
-    a.startedAt = parseIso8601Utc(o["started_at"] | static_cast<const char*>(nullptr));
-    return a;
-}
-
-// Walk a parsed (filtered) document. Unknown types/locations never abort:
-// they become AlertType::Unknown / skipped entries (Invariant 9).
-inline ParseError extractAlerts(JsonVariantConst root, SnapshotBuilder& b, ParseStats& st) {
-    JsonArrayConst arr = root["alerts"];
-    if (arr.isNull()) return ParseError::NoAlertsArray; // SPEC 167
-    b.reset();
-    for (JsonObjectConst o : arr) {
+// One region entry -> alerts into the builder. Unknown types never abort
+// (Invariant 9). INFO entries are messages, not threats: skipped.
+// Duplicates (a parent alert repeated in every child entry) are harmless -
+// the builder only keeps max coverage / earliest start per type.
+// One alert may carry both levels; red dominates, so one physical raid is
+// ever only ONE type (yellow only while no red level is active on it).
+inline void regionToAlerts(JsonVariantConst region, SnapshotBuilder& b, ParseStats& st) {
+    for (JsonObjectConst o : region["activeAlerts"].as<JsonArrayConst>()) {
         ++st.total;
-        Alert a = alertFromJson(o);
-        if (a.locationUid == 0) { ++st.skipped; continue; }
-        b.add(a);
+        const char* type = o["type"] | static_cast<const char*>(nullptr);
+        Alert a;
+        a.locationUid = uidFromJson(o["regionId"]);
+        if (a.locationUid == 0 || (type && !strcmp(type, "INFO"))) { ++st.skipped; continue; }
+        JsonArrayConst levels = o["activeAlertLevels"];
+        if (levels.size() == 0) { // ungraded alert = red
+            a.type = alertTypeFromApi(type, nullptr);
+            a.startedAt = parseIso8601Utc(o["lastUpdate"] | static_cast<const char*>(nullptr));
+            b.add(a);
+            continue;
+        }
+        Alert red = a, yellow = a;
+        bool hasRed = false, hasYellow = false;
+        for (JsonObjectConst l : levels) {
+            const int64_t ts = parseIso8601Utc(l["createdAt"] | static_cast<const char*>(nullptr));
+            Alert& lvl = alertTypeFromApi(type, l["alertLevel"] | static_cast<const char*>(nullptr))
+                             == AlertType::AirRaidYellow ? yellow : red;
+            (&lvl == &yellow ? hasYellow : hasRed) = true;
+            if (lvl.startedAt == 0 || (ts > 0 && ts < lvl.startedAt)) lvl.startedAt = ts;
+        }
+        if (hasRed) { red.type = alertTypeFromApi(type, nullptr); b.add(red); }
+        else if (hasYellow) { yellow.type = AlertType::AirRaidYellow; b.add(yellow); }
     }
+}
+
+// Walk a parsed (filtered) document: the root must be the region array.
+inline ParseError extractAlerts(JsonVariantConst root, SnapshotBuilder& b, ParseStats& st) {
+    JsonArrayConst regions = root.as<JsonArrayConst>();
+    if (regions.isNull()) return ParseError::NoAlertsArray; // SPEC 167
+    b.reset();
+    for (JsonVariantConst r : regions) regionToAlerts(r, b, st);
     return ParseError::None;
 }
 

@@ -22,6 +22,6 @@
 | Команда | Дія |
 |---|---|
 | `sim <тип> full\|partial\|none` | інжекція тривоги в обхід API (типи: air_raid, artillery_shelling, urban_fights, chemical, nuclear) |
-| `setmock <url>` | опитувати емулятор замість alerts.in.ua; `setmock` без аргументу — назад на бойовий API (див. docs/TESTING.md) |
+| `setmock <url>` | опитувати емулятор замість ukrainealarm.com; `setmock` без аргументу — назад на бойовий API (див. docs/TESTING.md) |
 
 Секрети ніколи не виводяться в консоль і не потрапляють у журнал.

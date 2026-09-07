@@ -13,7 +13,7 @@ public:
         HttpError,    // 5xx and other unexpected codes
         ParseError,   // invalid JSON (SPEC 9)
         RateLimited,  // 429 (SPEC 165)
-        AuthError     // 401 (SPEC 163)
+        AuthError     // 401 streak = bad key (SPEC 163); a lone 401 is rate limiting -> Success
     };
 
     struct Config {

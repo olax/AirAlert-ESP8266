@@ -1,7 +1,8 @@
-{"alerts":[
- {"id":101,"location_title":"Київська область","location_type":"oblast",
-  "started_at":"2026-08-21T08:00:00.000Z","finished_at":null,
-  "updated_at":"2026-08-21T08:00:05.000Z","alert_type":"air_raid",
-  "location_uid":"14","location_oblast":"Київська область",
-  "location_oblast_uid":"14","location_raion":null,"notes":null,"calculated":false}
-]}
+[
+ {"regionId":"14","regionType":"State","regionName":"Київська область","regionEngName":"Kyivska region",
+  "lastUpdate":"2026-08-21T08:00:05Z",
+  "activeAlerts":[
+   {"regionId":"14","regionType":"State","type":"AIR","lastUpdate":"2026-08-21T08:00:00Z",
+    "activeAlertLevels":[{"alertLevel":"Red","reason":"","createdAt":"2026-08-21T08:00:00.000Z"}]}
+  ]}
+]

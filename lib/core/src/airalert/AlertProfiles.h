@@ -15,7 +15,9 @@ struct AlertProfile {
     uint8_t priority = 50;
 };
 
-// Default priority order per SPEC 49: nuclear > chemical > artillery > urban > air raid.
+// Default priority order per SPEC 49: nuclear > chemical > artillery > urban >
+// air raid (red) > air raid (yellow). Yellow = drone threat: shorter start
+// pattern by default; every value is user-editable per profile.
 inline AlertProfile defaultProfile(AlertType t) {
     AlertProfile p;
     switch (t) {
@@ -24,6 +26,10 @@ inline AlertProfile defaultProfile(AlertType t) {
         case AlertType::ArtilleryShelling: p.priority = 60; break;
         case AlertType::UrbanFights: p.priority = 55; break;
         case AlertType::AirRaid: p.priority = 50; break;
+        case AlertType::AirRaidYellow:
+            p.priority = 45;
+            p.start = Pattern{true, 1000, 1000, 2};
+            break;
         default: p.priority = 40; break; // Unknown: signal, lowest priority
     }
     return p;
