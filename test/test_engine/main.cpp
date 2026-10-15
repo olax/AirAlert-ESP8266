@@ -17,6 +17,38 @@ static size_t apply(AlertEngine& e, const AlertEngine::Snapshot& s, EngineEvent*
     return e.applySnapshot(s, ev, 8);
 }
 
+// Red level dropped, yellow stays: yellow Started is a hand-over (red's end
+// is still pending), and red Ended next poll is too. A plain new threat is not.
+void test_handover_red_to_yellow() {
+    const uint8_t YEL = static_cast<uint8_t>(AlertType::AirRaidYellow);
+    AlertEngine e;
+    EngineEvent ev[8];
+    apply(e, snap(Coverage::Full), ev);                    // red
+    AlertEngine::Snapshot s{};
+    s.types[YEL] = {Coverage::Full, 1, 1000};
+    size_t n = apply(e, s, ev);                            // yellow only
+    TEST_ASSERT_EQUAL(1, n);
+    TEST_ASSERT_EQUAL(AlertEvent::Started, ev[0].kind);
+    TEST_ASSERT_TRUE(e.isHandover(ev[0], ev, n, false));
+    n = apply(e, s, ev);                                   // red ends
+    TEST_ASSERT_EQUAL(AlertEvent::Ended, ev[0].kind);
+    TEST_ASSERT_TRUE(e.isHandover(ev[0], ev, n, false));
+
+    s.types[CHEM] = {Coverage::Full, 1, 1000};             // added, not a hand-over
+    n = apply(e, s, ev);
+    TEST_ASSERT_EQUAL(AlertEvent::Started, ev[0].kind);
+    TEST_ASSERT_FALSE(e.isHandover(ev[0], ev, n, true));
+
+    AlertEngine e1({1, 1, true});                          // end in the same batch
+    apply(e1, snap(Coverage::Full), ev);
+    s.types[YEL] = {};
+    n = apply(e1, s, ev);                                  // red Ended + chem Started
+    TEST_ASSERT_EQUAL(2, n);
+    TEST_ASSERT_EQUAL(AlertEvent::Started, ev[1].kind);
+    TEST_ASSERT_FALSE(e1.isHandover(ev[1], ev, n, false)); // not air <-> air
+    TEST_ASSERT_TRUE(e1.isHandover(ev[1], ev, n, true));
+}
+
 void test_inactive_to_start() {
     AlertEngine e;
     EngineEvent ev[8];
@@ -184,5 +216,6 @@ int main() {
     RUN_TEST(test_unknown_until_first_sync);
     RUN_TEST(test_boot_into_active_alert);
     RUN_TEST(test_reset_returns_engine_to_unknown);
+    RUN_TEST(test_handover_red_to_yellow);
     return UNITY_END();
 }

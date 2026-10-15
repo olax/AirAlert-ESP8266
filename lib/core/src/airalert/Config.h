@@ -30,6 +30,10 @@ struct AppConfig {
     bool notifyEscalation = true;
     bool notifyAdditionalLocation = false;
     bool remindersWhenStale = false;
+    // Silence a hand-over between threat types (AlertEngine::isHandover):
+    // 0 = off (only the all-clear of one air colour while the other stays
+    // is silent), 1 = between the red and yellow air raid, 2 = between any types.
+    uint8_t quietTransitions = 2;
 
     // relay (SPEC 39, 41-42, 54). single: one relay on D5 holds the siren ON
     // by level; otherwise two relays pulse the START (D5) / STOP (D6) buttons.
@@ -78,6 +82,7 @@ inline ConfigError validateConfig(const AppConfig& c) {
         return ConfigError::BadStaleInterval;
     if (c.startConfirmations < 1 || c.startConfirmations > 5 ||
         c.endConfirmations < 1 || c.endConfirmations > 10) return ConfigError::BadConfirmations;
+    if (c.quietTransitions > 2) return ConfigError::BadPattern;
     if (c.relayMaxOnMs < 1000 || c.relayMaxOnMs > 60000) return ConfigError::BadRelayLimit;
     if (c.relayTestMs < 100 || c.relayTestMs > 10000) return ConfigError::BadTestMs;
     if (c.snoozeMinutes < 1 || c.snoozeMinutes > 240) return ConfigError::BadSnooze;
@@ -193,6 +198,7 @@ inline void configToJson(const AppConfig& c, JsonDocument& d) {
     a["notify_escalation"] = c.notifyEscalation;
     a["notify_additional_location"] = c.notifyAdditionalLocation;
     a["reminders_when_stale"] = c.remindersWhenStale;
+    a["quiet_transitions"] = c.quietTransitions;
     JsonObject r = d["relay"].to<JsonObject>();
     r["single"] = c.relaySingle;
     r["active_high"] = c.relayActiveHigh;
@@ -250,7 +256,8 @@ inline ConfigError configFromJson(JsonVariantConst d, AppConfig& c) {
         !overlayBool(a["partial_led"], c.partialLed) ||
         !overlayBool(a["notify_escalation"], c.notifyEscalation) ||
         !overlayBool(a["notify_additional_location"], c.notifyAdditionalLocation) ||
-        !overlayBool(a["reminders_when_stale"], c.remindersWhenStale))
+        !overlayBool(a["reminders_when_stale"], c.remindersWhenStale) ||
+        !overlayUnsigned(a["quiet_transitions"], c.quietTransitions))
         return ConfigError::BadPattern;
     JsonVariantConst r = d["relay"];
     if (!overlayBool(r["single"], c.relaySingle) ||

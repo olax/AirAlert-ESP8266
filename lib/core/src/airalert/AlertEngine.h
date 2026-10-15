@@ -64,6 +64,14 @@ public:
 
     const TypeStatus& status(AlertType t) const { return types_[static_cast<uint8_t>(t)]; }
     bool anyActive() const;
+    // True when `ev` (from the batch `applySnapshot` just returned) is one side
+    // of a hand-over between threat types, not a new threat / an all-clear:
+    // - Started X while another type is still Active but missing from this
+    //   snapshot (end pending) or Ended in the same batch;
+    // - Ended X while another type is still Active.
+    // anyType=false limits "another type" to the other air raid colour.
+    bool isHandover(const EngineEvent& ev, const EngineEvent* batch, size_t n,
+                    bool anyType) const;
     bool synced() const { return synced_; } // false until first snapshot (SPEC 166)
 
 private:

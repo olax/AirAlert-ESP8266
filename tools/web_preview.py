@@ -40,7 +40,7 @@ def default_config():  # mirrors AppConfig defaults (lib/core/src/airalert/Confi
             "alerts": {"poll_sec": 20, "stale_sec": 90, "start_conf": 1, "end_conf": 2,
                        "partial_active": True, "partial_siren": True, "partial_led": True,
                        "notify_escalation": True, "notify_additional_location": False,
-                       "reminders_when_stale": False},
+                       "reminders_when_stale": False, "quiet_transitions": 2},
             "relay": {"single": False, "active_high": True, "max_on_ms": 30000, "test_ms": 600},
             "mute": {"snooze_min": 15, "all_types": False},
             "led": {"alert_steady": False, "alert_active_high": True},

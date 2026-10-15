@@ -197,15 +197,12 @@ static void applyAndNotify(const AlertEngine::Snapshot& snap, bool simulated) {
         if (ev[i].kind == AlertEvent::Started && !appCfg.partialSiren &&
             engine.status(ev[i].type).coverage == Coverage::Partial)
             mode = NotificationEngine::StartupMode::Silent;
-        // One physical air raid, two colours: a colour ending while the other
-        // colour is still active is a level change, not an all-clear.
-        if (ev[i].kind == AlertEvent::Ended) {
-            const AlertType other =
-                ev[i].type == AlertType::AirRaid ? AlertType::AirRaidYellow
-                : ev[i].type == AlertType::AirRaidYellow ? AlertType::AirRaid : AlertType::Unknown;
-            if (other != AlertType::Unknown && engine.status(other).state == AlertState::Active)
-                mode = NotificationEngine::StartupMode::Silent;
-        }
+        // A hand-over between threat types (red -> yellow, ...) is a level
+        // change: no start signal for the new type (quiet_transitions) and
+        // never an all-clear for the old one while another type stays.
+        if ((ev[i].kind == AlertEvent::Ended || appCfg.quietTransitions) &&
+            engine.isHandover(ev[i], ev, n, appCfg.quietTransitions == 2))
+            mode = NotificationEngine::StartupMode::Silent;
         notify.onEngineEvent(ev[i], mode, millis());
         switch (ev[i].kind) {
             case AlertEvent::Started:

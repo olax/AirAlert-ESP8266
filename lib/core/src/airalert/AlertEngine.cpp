@@ -14,6 +14,25 @@ bool AlertEngine::anyActive() const {
     return false;
 }
 
+bool AlertEngine::isHandover(const EngineEvent& ev, const EngineEvent* batch, size_t n,
+                             bool anyType) const {
+    const auto isAir = [](AlertType t) {
+        return t == AlertType::AirRaid || t == AlertType::AirRaidYellow;
+    };
+    for (uint8_t i = 0; i < kAlertTypeCount; ++i) {
+        const AlertType other = static_cast<AlertType>(i);
+        if (other == ev.type || !(anyType || (isAir(ev.type) && isAir(other)))) continue;
+        const TypeStatus& ts = types_[i];
+        const bool active = ts.state == AlertState::Active;
+        if (ev.kind == AlertEvent::Ended && active) return true;
+        if (ev.kind != AlertEvent::Started) continue;
+        if (active && ts.endCount > 0) return true;
+        for (size_t k = 0; k < n; ++k)
+            if (batch[k].kind == AlertEvent::Ended && batch[k].type == other) return true;
+    }
+    return false;
+}
+
 void AlertEngine::reset() {
     for (auto& type : types_) type = TypeStatus{};
     synced_ = false;

@@ -141,6 +141,7 @@ button.btn.warn{background:#a35b18}button.btn.bad{background:#a33030}button.btn.
 <h2>Політика сповіщень</h2>
 <div class="row"><label><input type="checkbox" id="n_esc"> Сигналізувати посилення загрози</label></div>
 <div class="row"><label><input type="checkbox" id="n_loc"> Сигналізувати додаткову охоплену локацію</label></div>
+<div class="row"><label>Без сигналу при переході між загрозами <select id="n_qt"><option value="0">ні</option><option value="1">червона ↔ жовта</option><option value="2">будь-яка ↔ будь-яка</option></select></label></div>
 <div class="row"><label><input type="checkbox" id="n_stale"> Нагадувати, навіть якщо дані API застаріли</label></div>
 <button class="btn" onclick="saveConfig()">Зберегти</button>
 </div>
@@ -285,7 +286,7 @@ async function loadCfg(){cfg=await get("/api/v1/config");
  $("r_single").value=cfg.relay.single?"1":"0";relayModeUi();$("r_ah").value=cfg.relay.active_high?"1":"0";$("r_max").value=cfg.relay.max_on_ms;$("r_test").value=cfg.relay.test_ms;
  $("l_steady").checked=cfg.led.alert_steady;$("l_ah").value=cfg.led.alert_active_high?"1":"0";
  $("p_act").checked=cfg.alerts.partial_active;$("p_sir").checked=cfg.alerts.partial_siren;$("p_led").checked=cfg.alerts.partial_led;
- $("n_esc").checked=cfg.alerts.notify_escalation;$("n_loc").checked=cfg.alerts.notify_additional_location;$("n_stale").checked=cfg.alerts.reminders_when_stale;
+ $("n_esc").checked=cfg.alerts.notify_escalation;$("n_loc").checked=cfg.alerts.notify_additional_location;$("n_stale").checked=cfg.alerts.reminders_when_stale;$("n_qt").value=cfg.alerts.quiet_transitions??2;
  $("a_poll").value=cfg.alerts.poll_sec;$("a_stale").value=cfg.alerts.stale_sec;
  selected=(cfg.locations||[]).map(l=>l.uid);
  const sel=$("ptype");sel.innerHTML=Object.keys(cfg.profiles).map(k=>`<option value="${k}">${TYPES[k]||k}</option>`).join("");
@@ -407,7 +408,7 @@ async function saveConfig(){try{if(cfg.profiles&&$("profform").innerHTML)collect
  cfg.relay.single=$("r_single").value==="1";cfg.relay.active_high=$("r_ah").value==="1";cfg.relay.max_on_ms=+$("r_max").value;cfg.relay.test_ms=+$("r_test").value;
  cfg.led.alert_steady=$("l_steady").checked;cfg.led.alert_active_high=$("l_ah").value==="1";
  cfg.alerts.partial_active=$("p_act").checked;cfg.alerts.partial_siren=$("p_sir").checked;cfg.alerts.partial_led=$("p_led").checked;
- cfg.alerts.notify_escalation=$("n_esc").checked;cfg.alerts.notify_additional_location=$("n_loc").checked;cfg.alerts.reminders_when_stale=$("n_stale").checked;
+ cfg.alerts.notify_escalation=$("n_esc").checked;cfg.alerts.notify_additional_location=$("n_loc").checked;cfg.alerts.reminders_when_stale=$("n_stale").checked;cfg.alerts.quiet_transitions=+$("n_qt").value;
  cfg.alerts.poll_sec=+$("a_poll").value;cfg.alerts.stale_sec=+$("a_stale").value;
  await put("/api/v1/config",cfg);alert("Збережено");refresh()}catch(e){alert("Помилка: "+e.message)}}
 async function loadCat(){cat=(await get("/locations.json")).locations;renderLocs()}
