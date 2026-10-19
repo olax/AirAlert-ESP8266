@@ -43,6 +43,7 @@ public:
         const struct ActiveLocationView* activeView; // dashboard detail (SPEC 71)
         std::function<void()> applyConfig;      // config -> subsystems
         std::function<void(const String&)> setApiToken;
+        std::function<void(const String&)> setApiUrl; // LAN proxy, empty = official API
         std::function<void()> refreshAlerts;    // location selection changed
         std::function<void(bool)> mute;         // arg: long/snooze
         std::function<void()> unmute;
@@ -72,6 +73,7 @@ private:
     void handleConfigPut();
     void handleLocationsPut();
     void handleTokenPut();
+    void handleApiUrlPut();
     void handleEvents();
     void handleSystem();
     void handleScan();

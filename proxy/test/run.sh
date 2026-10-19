@@ -24,7 +24,7 @@ sed -e 's#/opt/airalert-proxy/lua#/proxy/lua#' \
     -e 's#listen 8081#listen 18081#' \
     -e '/regions_file/d' -e 's#/var/log/nginx/airalert-upstream.log#/tmp/upstream.log#' \
     -e 's#access_log /var/log/nginx/airalert-webhook.log#access_log off#' \
-    -e 's#rate=12r/m#rate=100r/s#' \
+    -e 's#rate=2r/s#rate=100r/s#' \
     -e 's#access_log /var/log/nginx/airalert-proxy.log#access_log off#' \
     -e "s#-- \"token  \# device\" per line#upstream = \"$E\", poll_every = 1, stale_after = 4, max_per_min = 1000,#" \
     proxy/nginx/airalert-proxy.conf > "$T/airalert.conf"

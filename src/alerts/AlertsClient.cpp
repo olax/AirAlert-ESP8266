@@ -4,8 +4,8 @@
 #include "CaBundle.h"
 #endif
 
-// SPEC 133: the hostname is immutable from the Web UI. Serial `setapi` may point
-// at a LAN proxy (proxy/README.md) or a dev emulator instead.
+// Default upstream. Serial `setapi` or the Web UI (API tab) may point at a LAN
+// proxy (proxy/README.md) or a dev emulator instead.
 static const char kAlertsHost[] = "api.ukrainealarm.com";
 static const char kAlertsUrl[] = "https://api.ukrainealarm.com/api/v3/alerts";
 

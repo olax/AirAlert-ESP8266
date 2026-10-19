@@ -192,9 +192,12 @@ button.btn.warn{background:#a35b18}button.btn.bad{background:#a33030}button.btn.
 <label>Новий API ключ (write-only, не відображається; отримати: api.ukrainealarm.com)</label>
 <input id="newtok" type="password" autocomplete="off">
 <div style="margin-top:8px"><button class="btn" onclick="saveToken()">Зберегти токен</button></div>
-<label>Інтервал опитування, с (10–600)</label>
-<input id="a_poll" type="number" min="10" max="600">
-<p class="mut">ukrainealarm приймає ~3 запити/хв на ключ: інтервал менше 20 с лише збільшує частку відмов (401).</p>
+<label>Адреса проксі (порожньо = напряму api.ukrainealarm.com)</label>
+<input id="apiurl" type="url" maxlength="192" placeholder="http://192.168.0.232:8088/api/v3/alerts">
+<div style="margin-top:8px"><button class="btn" onclick="saveApiUrl()">Зберегти адресу</button></div>
+<label>Інтервал опитування, с (1–600)</label>
+<input id="a_poll" type="number" min="1" max="600">
+<p class="mut">Напряму ukrainealarm приймає ~3 запити/хв на ключ: інтервал менше 20 с лише збільшує частку відмов (401), а менше 10 с без проксі не застосовується. Через проксі — від 1 с.</p>
 <label>Дані застарілі після, с</label>
 <input id="a_stale" type="number" min="30" max="600">
 <div style="margin-top:8px"><button class="btn" onclick="saveConfig()">Зберегти</button></div>
@@ -422,7 +425,8 @@ async function saveLocs(){try{const locs=selected.filter(u=>cat.some(x=>x.uid===
  await put("/api/v1/locations",{locations:locs});alert("Збережено");loadCfg()}catch(e){alert("Помилка: "+e.message)}}
 async function saveToken(){const t=$("newtok").value.trim();if(!t)return;
  try{await put("/api/v1/secrets/api-token",{token:t});$("newtok").value="";alert("Ключ збережено");loadTok()}catch(e){alert("Помилка: "+e.message)}}
-async function loadTok(){try{const s=await get("/api/v1/status");$("tokstate").textContent=s.api.token_present?"налаштовано":"ВІДСУТНІЙ"}catch(e){}}
+async function loadTok(){try{const s=await get("/api/v1/status");$("tokstate").textContent=s.api.token_present?"налаштовано":"ВІДСУТНІЙ";$("apiurl").value=s.api.url||""}catch(e){}}
+async function saveApiUrl(){try{await put("/api/v1/secrets/api-url",{url:$("apiurl").value.trim()});alert("Адресу збережено");loadTok()}catch(e){alert("Помилка: "+e.message)}}
 const relaySingle=()=>$("r_single").value==="1";
 function relayModeUi(){const one=relaySingle();
  $("r_warn").textContent=one?"⚠ УВАГА: тести фізично вмикають сирену. Реле D5 — сирена УВІМК/ВИМК.":"⚠ УВАГА: тести фізично натискають кнопки сирени. Реле 1 (D5) — СТАРТ, реле 2 (D6) — СТОП.";

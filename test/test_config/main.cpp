@@ -154,7 +154,7 @@ void test_schema1_default_cadence_migrates_to_schema2() { // ukrainealarm quota
 
 void test_validation_rejects_bad_ranges() { // SPEC 7, 42, 155
     AppConfig c;
-    c.pollIntervalSec = 5; // below API-safe minimum
+    c.pollIntervalSec = 0; // below minimum
     TEST_ASSERT_EQUAL(ConfigError::BadPollInterval, validateConfig(c));
     c = AppConfig{};
     c.relayMaxOnMs = 300000; // above hard cap 60 s

@@ -132,6 +132,13 @@ static void refreshLocations() {
     nextPollAt = millis();
 }
 
+// Sub-10 s polling is meant for the LAN proxy; the key itself takes ~3 req/min.
+static void applyPollInterval() {
+    const uint16_t sec = client.mocked() ? appCfg.pollIntervalSec
+                                         : std::max<uint16_t>(appCfg.pollIntervalSec, 10);
+    backoff.setConfig({sec * 1000u, 120000, 60000, 300000, 10});
+}
+
 // Config -> subsystems (SPEC 25 step 4; re-applied after Web UI edits)
 static void applyConfig() {
     engine.setConfig({appCfg.startConfirmations, appCfg.endConfirmations,
@@ -145,7 +152,7 @@ static void applyConfig() {
         notify.setProfile(static_cast<AlertType>(i), appCfg.profiles[i]);
     relay.begin(pins::SIREN_START, pins::SIREN_STOP, appCfg.relayActiveHigh,
                 appCfg.relayMaxOnMs, appCfg.relaySingle);
-    backoff.setConfig({appCfg.pollIntervalSec * 1000u, 120000, 60000, 300000, 10});
+    applyPollInterval();
     health.setConfig({appCfg.apiStaleAfterSec * 1000u});
     builder.setSelected(appCfg.selected, appCfg.selectedCount);
     builder.setCatalog(&catalog);
@@ -345,7 +352,7 @@ static void handleSerialLine(String line) {
         secrets = next;
         Serial.println("[CFG] web password saved");
     } else if (line.startsWith("setapi") || line.startsWith("setmock")) {
-        // LAN proxy or emulator URL, empty = real API. Serial only (SPEC 133).
+        // LAN proxy or emulator URL, empty = real API (also in the Web UI API tab).
         const int sp = line.indexOf(' ');
         String mockUrl = sp > 0 ? line.substring(sp + 1) : "";
         mockUrl.trim();
@@ -478,6 +485,7 @@ void setup() {
     if (mockUrl.length()) {
         client.setMockUrl(mockUrl);
         Serial.printf("[API] API URL OVERRIDE: %s\n", mockUrl.c_str());
+        applyPollInterval();
     }
     wifi.begin(&secrets); // STA or provisioning AP (SPEC 78-81)
 
@@ -488,6 +496,11 @@ void setup() {
                    client.begin(t);
                    auth401Streak = 0;     // new key: judge it afresh
                    nextPollAt = millis(); // poll with the new token immediately
+               },
+               [](const String& url) {
+                   client.setMockUrl(url);
+                   applyPollInterval();
+                   nextPollAt = millis();
                },
                [] { refreshLocations(); },
                [](bool longPress) { muteNow(longPress); },

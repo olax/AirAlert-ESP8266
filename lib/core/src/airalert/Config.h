@@ -20,7 +20,7 @@ struct AppConfig {
 
     // alerts. ukrainealarm.com accepts ~3 requests/min per key and answers
     // the rest with 401 (docs/RESEARCH.md): 20 s = 3/min, ~2 of them accepted.
-    uint16_t pollIntervalSec = 20;   // min 10 (SPEC 7)
+    uint16_t pollIntervalSec = 20;   // min 1; < 10 s only applies via a LAN proxy
     uint16_t apiStaleAfterSec = 90;  // survives 3 rate-limited polls in a row
     uint8_t startConfirmations = 1;
     uint8_t endConfirmations = 2;
@@ -77,7 +77,7 @@ inline ConfigError validateConfig(const AppConfig& c) {
         return ConfigError::BadSchema;
     const size_t nameLen = strnlen(c.deviceName, sizeof c.deviceName);
     if (nameLen == 0 || nameLen >= sizeof c.deviceName) return ConfigError::BadDeviceName;
-    if (c.pollIntervalSec < 10 || c.pollIntervalSec > 600) return ConfigError::BadPollInterval;
+    if (c.pollIntervalSec < 1 || c.pollIntervalSec > 600) return ConfigError::BadPollInterval;
     if (c.apiStaleAfterSec < 30 || c.apiStaleAfterSec > 600)
         return ConfigError::BadStaleInterval;
     if (c.startConfirmations < 1 || c.startConfirmations > 5 ||

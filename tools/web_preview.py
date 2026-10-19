@@ -136,7 +136,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                   "started_at": int(State.started)}] if State.alert else []
         return {"firmware": VERSION + "-preview", "uptime_sec": int(time.time() - State.started),
                 "wifi": {"connected": True, "rssi": -58},
-                "api": {"online": True, "stale": False, "ever_synced": True, "token_present": True,
+                "api": {"online": True, "stale": False, "ever_synced": True, "token_present": True, "url": "",
                         "selected_locations": len(State.cfg.get("locations", [])),
                         "ntp_synced": True, "last_http_code": 200, "last_contact_sec": 4,
                         "waiting_reason": None},
@@ -163,6 +163,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.send(200, {"ok": True})
         if self.path == "/api/v1/secrets/api-token":
             State.event("CONFIG_CHANGED", "api_token")
+            return self.send(200, {"ok": True})
+        if self.path == "/api/v1/secrets/api-url":
+            State.event("CONFIG_CHANGED", "api_url")
             return self.send(200, {"ok": True})
         self.error(404, "NOT_FOUND", "unknown endpoint")
 

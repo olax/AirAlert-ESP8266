@@ -117,6 +117,7 @@ void WebUi::begin(const Deps& d) {
     server_.on("/api/v1/config", HTTP_PUT, [this] { handleConfigPut(); });
     server_.on("/api/v1/locations", HTTP_PUT, [this] { handleLocationsPut(); });
     server_.on("/api/v1/secrets/api-token", HTTP_PUT, [this] { handleTokenPut(); });
+    server_.on("/api/v1/secrets/api-url", HTTP_PUT, [this] { handleApiUrlPut(); });
     server_.on("/api/v1/events", HTTP_GET, [this] { handleEvents(); });
     server_.on("/api/v1/system", HTTP_GET, [this] { handleSystem(); });
 
@@ -266,6 +267,7 @@ void WebUi::handleStatus() { // SPEC 127; auth required (SPEC 99 default)
     if (since == UINT32_MAX) d["api"]["last_contact_sec"] = nullptr;
     else d["api"]["last_contact_sec"] = since / 1000;
     d["api"]["token_present"] = d_.secrets->apiToken.length() > 0; // value never sent (SPEC 6)
+    d["api"]["url"] = d_.secrets->mockUrl; // "" = official API
     JsonArray types = d["alerts"]["types"].to<JsonArray>();
     bool any = false;
     for (uint8_t i = 0; i < kAlertTypeCount; ++i) {
@@ -380,6 +382,29 @@ void WebUi::handleTokenPut() { // write-only (SPEC 91)
     *d_.secrets = next;
     d_.setApiToken(tok);
     d_.log->log(LogEvent::ConfigChanged, "api_token");
+    server_.send(200, "application/json", "{\"ok\":true}");
+}
+
+void WebUi::handleApiUrlPut() { // same rules as serial `setapi`
+    if (!authed()) return;
+    JsonDocument d;
+    String url = (deserializeJson(d, server_.arg("plain")) == DeserializationError::Ok)
+                     ? (d["url"] | "") : String();
+    url.trim();
+    if (url.length() > 192 ||
+        (url.length() && !url.startsWith("http://") && !url.startsWith("https://"))) {
+        sendError(422, "BAD_URL", "url must be empty or http(s)://..., max 192 chars");
+        return;
+    }
+    SecretsStore next = *d_.secrets;
+    next.mockUrl = url;
+    if (!next.save()) {
+        sendError(500, "FS_ERROR", "cannot persist API url");
+        return;
+    }
+    *d_.secrets = next;
+    d_.setApiUrl(url);
+    d_.log->log(LogEvent::ConfigChanged, "api_url");
     server_.send(200, "application/json", "{\"ok\":true}");
 }
 

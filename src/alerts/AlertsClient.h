@@ -34,7 +34,7 @@ public:
     bool hasCachedSnapshot() const { return cache_.canAcceptNotModified(); }
 
     // Poll a LAN proxy (proxy/README.md) or a dev emulator instead of
-    // production. Serial-only (`setapi <url>`), never via the Web UI (SPEC 133).
+    // production. Set via serial `setapi <url>` or the Web UI API tab.
     void setMockUrl(const String& url) {
         if (url != mockUrl_) invalidateCache();
         mockUrl_ = url;
