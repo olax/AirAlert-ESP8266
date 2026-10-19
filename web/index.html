@@ -253,7 +253,8 @@ async function login(){try{const r=await fetch("/api/v1/login",{method:"POST",he
  tok=(await r.json()).token;sessionStorage.setItem("t",tok);$("login").classList.add("hide");init()}catch(e){$("loginmsg").textContent="Помилка з'єднання"}}
 $("pw").addEventListener("keydown",e=>{if(e.key==="Enter")login()});
 function badge(n,cls){return `<span class="b ${cls}">${n}</span>`}
-async function refresh(){try{const s=await get("/api/v1/status");
+async function refresh(){if(!cfg)loadCfg().catch(()=>{});if(!cat)loadCat().catch(()=>{}); // init fetch may have failed
+ try{const s=await get("/api/v1/status");
  const b=[];b.push(badge("Wi-Fi "+(s.wifi.connected?s.wifi.rssi+" dBm":"—"),s.wifi.connected?"ok":"bad"));
  b.push(badge("API",s.api.online?"ok":"bad"));b.push(badge(s.api.stale?"Дані застарілі":"Дані свіжі",s.api.stale?"warn":"ok"));
  if(s.alerts.muted)b.push(badge("🔇 Заглушено","warn"));if(s.relay.active)b.push(badge("РЕЛЕ УВІМК","bad"));
@@ -407,7 +408,8 @@ function renderProfile(){if(curProf&&$("pr_en"))collectProfile();sqStop();
 function collectProfile(){const p=cfg.profiles[curProf];if(!p)return;
  p.enabled=$("pr_en").checked;p.priority=+$("pr_pri").value;p.reminder.interval_sec=+$("pr_int").value;
  for(const n in seqs){const s=seqs[n];Object.assign(p[n],{enabled:s.enabled,repeat:s.repeat,steps:s.steps.slice()});delete p[n].on_ms;delete p[n].off_ms}}
-async function saveConfig(){try{if(cfg.profiles&&$("profform").innerHTML)collectProfile();
+async function saveConfig(){try{if(!cfg){await loadCfg();alert("Налаштування щойно завантажились — перевірте значення і збережіть ще раз");return}
+ if(cfg.profiles&&$("profform").innerHTML)collectProfile();
  cfg.relay.single=$("r_single").value==="1";cfg.relay.active_high=$("r_ah").value==="1";cfg.relay.max_on_ms=+$("r_max").value;cfg.relay.test_ms=+$("r_test").value;
  cfg.led.alert_steady=$("l_steady").checked;cfg.led.alert_active_high=$("l_ah").value==="1";
  cfg.alerts.partial_active=$("p_act").checked;cfg.alerts.partial_siren=$("p_sir").checked;cfg.alerts.partial_led=$("p_led").checked;
@@ -472,7 +474,7 @@ function showTab(k){document.querySelectorAll("main>section").forEach(s=>s.class
  document.querySelectorAll("nav button").forEach(b=>b.classList.toggle("on",b.dataset.k===k));
  if(k==="sig"&&cfg)Object.keys(seqs).forEach(sqDraw);if(k==="log")loadLog();if(k==="sys")loadSys();if(k==="api")loadTok()}
 $("tabs").innerHTML=Object.entries(TABS).map(([k,n])=>`<button data-k="${k}" onclick="showTab('${k}')">${n}</button>`).join("");
-async function init(){$("login").classList.add("hide");await loadCfg();await loadCat();refresh();
+async function init(){$("login").classList.add("hide");await loadCfg().catch(()=>{});await loadCat().catch(()=>{});refresh();
  if(!refreshTimer)refreshTimer=setInterval(refresh,5000);showTab("dash")}
 (async()=>{if(!tok){$("login").classList.remove("hide");return}
  try{await get("/api/v1/status");init()}catch(e){}})();
